@@ -119,9 +119,27 @@ body {
 .turn-ind { width: 7px; height: 7px; background: var(--gold); border-radius: 50%; animation: pulse 1s infinite; display: none; flex-shrink: 0; }
 .turn-ind.on { display: block; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
-.opp-hand { display: flex; gap: 2px; overflow: hidden; flex-wrap: wrap; max-height: 38px; }
-.card-back { width: 22px; height: 33px; background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 1px solid #4a4aaa; border-radius: 3px; flex-shrink: 0; }
-.opp-score { font-size: .67rem; color: #9a9; margin-top: 3px; }
+@keyframes dealIn {
+  from { transform: scale(0.45) translateY(-14px); opacity: 0; }
+  to   { transform: scale(1)    translateY(0);      opacity: 1; }
+}
+.card.deal-in { animation: dealIn 0.32s ease-out forwards; }
+.card-stack {
+  position: relative; flex-shrink: 0;
+  width: calc(var(--card-w) + 14px);
+  height: calc(var(--card-h) + 14px);
+}
+.opp-captured {
+  display: flex; gap: 2px; overflow-x: auto; margin-top: 3px;
+  scrollbar-width: none; min-height: 32px; align-items: center;
+}
+.opp-captured::-webkit-scrollbar { display: none; }
+.opp-cap-card {
+  width: 20px; height: 30px; flex-shrink: 0;
+  background-size: 100% 100%; background-color: #fff;
+  border-radius: 2px; border: 1px solid rgba(255,255,255,.25);
+}
+.opp-score { font-size: .67rem; color: #9a9; margin-top: 2px; }
 
 /* Field area */
 .field-section {
@@ -422,6 +440,7 @@ let selCard = null;
 let pendingChoices = [];
 let waitField = false, waitDeck = false;
 let chatOpen = false, chatUnread = 0;
+let prevFieldIds = new Set();
 
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -583,14 +602,48 @@ function setStatus(msg, mine) {
 function renderField(cards) {
   const el = document.getElementById('field-cards');
   el.innerHTML = '';
-  cards.forEach(c => {
-    const isChoice = pendingChoices.includes(c.id) && (waitField || waitDeck);
-    const isMatch  = selCard && !waitField && !waitDeck && gs?.isMyTurn && gs?.phase==='play' && c.month === selCard.month;
-    let ec = '';
-    if (isChoice || isMatch) ec = 'highlight';
-    const onClick = (isChoice || isMatch) ? card => fieldClick(card.id) : null;
-    el.appendChild(makeCard(c, { onClick, extraClass: ec }));
+
+  const byMonth = {};
+  cards.forEach(c => { (byMonth[c.month] = byMonth[c.month] || []).push(c); });
+  const months = Object.keys(byMonth).map(Number).sort((a, b) => a - b);
+
+  months.forEach(month => {
+    const mc = byMonth[month];
+    const makeFieldCard = (c, i = 0) => {
+      const isChoice = pendingChoices.includes(c.id) && (waitField || waitDeck);
+      const isMatch  = selCard && !waitField && !waitDeck && gs?.isMyTurn && gs?.phase==='play' && c.month === selCard.month;
+      const ec       = isChoice || isMatch ? 'highlight' : '';
+      const onClick  = isChoice || isMatch ? () => fieldClick(c.id) : null;
+      const cd       = makeCard(c, { onClick, extraClass: ec });
+      if (!prevFieldIds.has(c.id)) {
+        cd.classList.add('deal-in');
+        cd.style.animationDelay = `${i * 55}ms`;
+        cd.addEventListener('animationend', () => {
+          cd.classList.remove('deal-in');
+          cd.style.animationDelay = '';
+        }, { once: true });
+      }
+      return cd;
+    };
+
+    if (mc.length >= 3) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'card-stack';
+      mc.forEach((c, i) => {
+        const cd = makeFieldCard(c, i);
+        cd.style.position = 'absolute';
+        cd.style.top  = `${i * 3}px`;
+        cd.style.left = `${i * 3}px`;
+        cd.style.zIndex = i;
+        wrapper.appendChild(cd);
+      });
+      el.appendChild(wrapper);
+    } else {
+      mc.forEach((c, i) => el.appendChild(makeFieldCard(c, i)));
+    }
   });
+
+  prevFieldIds = new Set(cards.map(c => c.id));
 }
 
 function renderMyHand(cards, active) {
@@ -616,22 +669,34 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid) {
   const row = document.getElementById('opponents-row');
   row.innerHTML = '';
   pids.filter(p => p !== myId).forEach(pid => {
-    const sc  = scores[pid] || { score:0, counts:{gwang:0,yeol:0,ribbon:0,pi:0} };
-    const gc  = go[pid] || 0;
-    const cur = pid === curPid;
-    const div = document.createElement('div');
+    const sc   = scores[pid] || { score:0, counts:{gwang:0,yeol:0,ribbon:0,pi:0} };
+    const gc   = go[pid] || 0;
+    const cur  = pid === curPid;
+    const caps = cap[pid] || [];
+    const div  = document.createElement('div');
     div.className = 'opponent-panel';
     div.innerHTML = `
       <div class="opp-name">
         <span class="turn-ind ${cur?'on':''}"></span>
         ${nm[pid]}${gc>0?` <span style="color:#f06020;font-size:.65rem">${gc}고</span>`:''}
+        <span style="margin-left:auto;font-size:.62rem;color:#777">손패 ${hs[pid]||0}</span>
       </div>
-      <div class="opp-hand" id="oh-${pid}"></div>
+      <div class="opp-captured" id="oc-${pid}"></div>
       <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>`;
-    const hd = div.querySelector(`#oh-${pid}`);
-    const n = Math.min(hs[pid]||0, 10);
-    for (let i=0;i<n;i++) { const b=document.createElement('div'); b.className='card-back'; hd.appendChild(b); }
-    if ((hs[pid]||0)>10) { const s=document.createElement('span'); s.style.cssText='font-size:.65rem;color:#888;align-self:center'; s.textContent=`+${(hs[pid]||0)-10}`; hd.appendChild(s); }
+    const capEl = div.querySelector(`#oc-${pid}`);
+    if (caps.length === 0) {
+      const emp = document.createElement('span');
+      emp.style.cssText = 'font-size:.62rem;color:#555';
+      emp.textContent = '획득 없음';
+      capEl.appendChild(emp);
+    } else {
+      caps.forEach(c => {
+        const img = document.createElement('div');
+        img.className = 'opp-cap-card';
+        img.style.backgroundImage = `url('img/cards/${c.id}.png')`;
+        capEl.appendChild(img);
+      });
+    }
     row.appendChild(div);
   });
 }
