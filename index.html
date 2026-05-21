@@ -182,10 +182,12 @@ body {
 .turn-ind.on { display: block; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
 @keyframes dealIn {
-  from { transform: scale(0.45) translateY(-14px); opacity: 0; }
-  to   { transform: scale(1)    translateY(0);      opacity: 1; }
+  0%   { transform: perspective(500px) rotateY(90deg) scale(0.85); opacity: 0; }
+  45%  { transform: perspective(500px) rotateY(-9deg) scale(1.05); opacity: 1; }
+  72%  { transform: perspective(500px) rotateY(4deg)  scale(1.01); }
+  100% { transform: perspective(500px) rotateY(0deg)  scale(1);    opacity: 1; }
 }
-.card.deal-in { animation: dealIn 0.32s ease-out forwards; }
+.card.deal-in { animation: dealIn 0.7s ease-out forwards; }
 .card-stack {
   position: relative; flex-shrink: 0;
   width: calc(var(--card-w) + 14px);
@@ -236,9 +238,19 @@ body {
 .score-compact .sc-item  { color: #bbb; }
 .score-compact .sc-item span { color: var(--gold); font-weight: bold; }
 .captured-toggle { font-size: .68rem; color: #7a9; cursor: pointer; margin-top: 3px; display: inline-block; padding: 2px 0; }
-.captured-area { display: none; flex-wrap: wrap; gap: 2px; margin-top: 4px; max-height: 50px; overflow-y: auto; }
+.captured-area { display: none; flex-wrap: wrap; gap: 2px; margin-top: 4px; max-height: 56px; overflow-y: auto; align-items: flex-end; }
 .captured-area.open { display: flex; }
 .captured-area .card { width: 28px; height: 42px; }
+.cap-type-label {
+  font-size: .52rem; color: #8bc; background: rgba(255,255,255,.1);
+  border-radius: 3px; padding: 1px 3px; align-self: flex-end;
+  margin: 0 1px 1px 5px; white-space: nowrap; flex-shrink: 0;
+}
+.cap-type-label:first-child { margin-left: 0; }
+.opp-cap-label {
+  font-size: .5rem; color: #8bc; align-self: center;
+  padding: 0 2px; white-space: nowrap; flex-shrink: 0;
+}
 
 /* My hand */
 .my-hand-section {
@@ -393,6 +405,29 @@ body {
   padding: 10px 16px; font-size: .9rem; font-weight: bold; cursor: pointer;
 }
 .btn-chat:active { opacity: .8; }
+
+/* ── ROOM LIST ── */
+.room-list-box {
+  background: rgba(0,0,0,.45); border: 2px solid #3a6a5a;
+  border-radius: 16px; padding: 16px 18px;
+  width: 100%; max-width: 400px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.room-list-title { font-size: .85rem; color: #9ab; }
+.room-list-item {
+  background: rgba(255,255,255,.06); border: 1px solid #3a6a4a;
+  border-radius: 10px; padding: 10px 14px;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.room-list-code  { font-size: 1.15rem; font-weight: bold; color: var(--gold); letter-spacing: 4px; }
+.room-list-info  { font-size: .72rem; color: #999; margin-top: 2px; }
+.btn-join-room {
+  background: #1a5a70; color: #fff; border: none; border-radius: 8px;
+  padding: 8px 14px; font-size: .85rem; font-weight: bold; cursor: pointer;
+  flex-shrink: 0; min-height: 38px;
+}
+.btn-join-room:active { opacity: .8; }
+.room-list-empty { font-size: .78rem; color: #555; text-align: center; padding: 8px 0; }
 </style>
 </head>
 <body>
@@ -418,6 +453,14 @@ body {
     <input id="inp-room" placeholder="예: 1234" maxlength="4" inputmode="numeric" pattern="[0-9]*">
     <button class="btn btn-secondary" onclick="joinRoom()">방 참가</button>
     <div class="err-msg" id="lobby-err"></div>
+  </div>
+
+  <!-- 대기 중인 방 목록 -->
+  <div class="room-list-box" id="room-list-box" style="display:none">
+    <div class="room-list-title">🚪 대기 중인 방</div>
+    <div id="room-list-el">
+      <div class="room-list-empty">대기 중인 방이 없습니다</div>
+    </div>
   </div>
 </div>
 
@@ -599,6 +642,12 @@ function startGame() { socket.emit('start_game'); }
 function lobbyErr(m) { document.getElementById('lobby-err').textContent = m; }
 function roomErr(m)  { document.getElementById('room-err').textContent = m; }
 
+function quickJoin(roomId) {
+  const n = document.getElementById('inp-name').value.trim();
+  if (!n) return lobbyErr('이름을 먼저 입력하세요.');
+  socket.emit('join_room', { roomId, name: n });
+}
+
 function renderPlayers(ps) {
   const ul = document.getElementById('player-list');
   ul.innerHTML = '';
@@ -681,6 +730,29 @@ socket.on('player_left', d => {
 });
 
 socket.on('err', m => { lobbyErr(m); roomErr(m); });
+
+socket.on('room_list', ({ rooms }) => {
+  const box = document.getElementById('room-list-box');
+  const el  = document.getElementById('room-list-el');
+  el.innerHTML = '';
+
+  const waiting = rooms.filter(r => r.playerCount > 0);
+  box.style.display = waiting.length > 0 ? '' : 'none';
+
+  if (waiting.length === 0) return;
+
+  waiting.forEach(r => {
+    const item = document.createElement('div');
+    item.className = 'room-list-item';
+    item.innerHTML = `
+      <div>
+        <div class="room-list-code">${r.roomId}</div>
+        <div class="room-list-info">${r.playerCount}명 참가 중 · 시작 점수 ${r.initialScore}점</div>
+      </div>
+      <button class="btn-join-room" onclick="quickJoin('${r.roomId}')">참가 →</button>`;
+    el.appendChild(item);
+  });
+});
 
 socket.on('first_draw_start', d => {
   document.getElementById('chat-fab').classList.add('visible');
@@ -978,10 +1050,28 @@ function renderMyHand(cards, active) {
   });
 }
 
+const CAP_TYPE_ORDER  = ['gwang', 'yeolkkut', 'ribbon', 'pi'];
+const CAP_TYPE_LABELS = { gwang: '광', yeolkkut: '열끗', ribbon: '띠', pi: '피' };
+
+function groupCardsByType(cards) {
+  const g = { gwang: [], yeolkkut: [], ribbon: [], pi: [] };
+  cards.forEach(c => { if (g[c.type]) g[c.type].push(c); });
+  return g;
+}
+
 function renderMyCaptured(cards) {
   const el = document.getElementById('my-captured');
   el.innerHTML = '';
-  cards.forEach(c => el.appendChild(makeCard(c)));
+  const groups = groupCardsByType(cards);
+  CAP_TYPE_ORDER.forEach(type => {
+    const cs = groups[type];
+    if (!cs.length) return;
+    const lbl = document.createElement('span');
+    lbl.className = 'cap-type-label';
+    lbl.textContent = CAP_TYPE_LABELS[type];
+    el.appendChild(lbl);
+    cs.forEach(c => el.appendChild(makeCard(c)));
+  });
 }
 
 function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
@@ -1013,11 +1103,20 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
       emp.textContent = '획득 없음';
       capEl.appendChild(emp);
     } else {
-      caps.forEach(c => {
-        const img = document.createElement('div');
-        img.className = 'opp-cap-card';
-        img.style.backgroundImage = `url('img/cards/${c.id}.png')`;
-        capEl.appendChild(img);
+      const groups = groupCardsByType(caps);
+      CAP_TYPE_ORDER.forEach(type => {
+        const cs = groups[type];
+        if (!cs.length) return;
+        const lbl = document.createElement('span');
+        lbl.className = 'opp-cap-label';
+        lbl.textContent = CAP_TYPE_LABELS[type];
+        capEl.appendChild(lbl);
+        cs.forEach(c => {
+          const img = document.createElement('div');
+          img.className = 'opp-cap-card';
+          img.style.backgroundImage = `url('img/cards/${c.id}.png')`;
+          capEl.appendChild(img);
+        });
       });
     }
     row.appendChild(div);

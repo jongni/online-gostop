@@ -304,6 +304,23 @@ def after_deck_card(room, pid):
         broadcast_state(room)
 
 
+# ── 방 목록 ──────────────────────────────────────────────────────────
+
+def get_room_list():
+    return [
+        {
+            'roomId':      r['id'],
+            'playerCount': len(r['players']),
+            'initialScore': r['initial_score'],
+        }
+        for r in rooms.values()
+        if r['state'] == 'waiting'
+    ]
+
+def broadcast_room_list():
+    socketio.emit('room_list', {'rooms': get_room_list()})
+
+
 # ── HTTP routes ──────────────────────────────────────────────────────
 
 @app.route('/')
@@ -320,6 +337,7 @@ def static_files(filename):
 @socketio.on('connect')
 def on_connect():
     print(f'접속: {request.sid}')
+    emit('room_list', {'rooms': get_room_list()})
 
 
 @socketio.on('create_room')
@@ -354,6 +372,7 @@ def on_create_room(data):
         'isHost':       True,
         'initialScore': initial_score,
     })
+    broadcast_room_list()
 
 
 @socketio.on('join_room')
@@ -380,6 +399,7 @@ def on_join_room(data):
         'isHost':       False,
         'initialScore': room['initial_score'],
     })
+    broadcast_room_list()
 
 
 @socketio.on('start_game')
@@ -418,6 +438,7 @@ def on_start_game():
             'playerScores': room['player_scores'],
             'initialScore': room['initial_score'],
         }, to=room_id)
+        broadcast_room_list()
     else:
         # ── 이후 게임 또는 선 결정 완료 후 ──────────────────────────────
         start_actual_game(room, first_pid=room.get('first_player_id'))
@@ -602,8 +623,10 @@ def on_disconnect():
     room['players'] = [p for p in room['players'] if p['id'] != sid]
     if not room['players']:
         del rooms[room_id]
+        broadcast_room_list()
     else:
         socketio.emit('player_left', {'name': name, 'players': room['players']}, to=room_id)
+        broadcast_room_list()
         if room['state'] == 'playing':
             end_game(room)
         elif room['state'] == 'first_draw':
