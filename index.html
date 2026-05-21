@@ -2,28 +2,32 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <title>🎴 온라인 고스톱</title>
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
 :root {
   --felt: #1a5c2a;
   --felt-dark: #123d1c;
   --gold: #f0c040;
-  --card-w: 62px;
-  --card-h: 92px;
+  --card-w: 52px;
+  --card-h: 78px;
 }
 
 body {
-  font-family: 'Malgun Gothic', sans-serif;
+  font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
   background: var(--felt-dark);
   color: #eee;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  touch-action: manipulation;
 }
 
 .screen { display: none; width: 100%; height: 100%; }
@@ -33,182 +37,264 @@ body {
 #s-lobby {
   align-items: center; justify-content: center;
   background: radial-gradient(ellipse at center,#1e6b32 0%,#0d3018 100%);
-  flex-direction: column; gap: 20px;
+  flex-direction: column; gap: 16px; padding: 24px 20px;
+  overflow-y: auto;
 }
+.lobby-header { text-align: center; }
+.lobby-emoji { font-size: 3.5rem; line-height: 1; }
+.lobby-title-text { font-size: 1.8rem; color: var(--gold); font-weight: bold; margin-top: 6px; }
+.lobby-sub { font-size: .85rem; color: #888; margin-top: 4px; }
 .lobby-box {
   background: rgba(0,0,0,.5); border: 2px solid #4a8a4a;
-  border-radius: 16px; padding: 32px 40px; width: 360px;
-  display: flex; flex-direction: column; gap: 14px;
+  border-radius: 16px; padding: 24px 20px;
+  width: 100%; max-width: 400px;
+  display: flex; flex-direction: column; gap: 12px;
 }
-.lobby-title { font-size: 2rem; font-weight: bold; text-align: center; color: var(--gold); text-shadow: 0 0 20px rgba(240,192,64,.6); }
-.lobby-box label { font-size: .85rem; color: #aaa; margin-bottom: -8px; }
+.lobby-box label { font-size: .85rem; color: #aaa; }
 .lobby-box input {
-  padding: 10px 14px; border-radius: 8px; border: 1px solid #4a8a4a;
-  background: #0a2010; color: #eee; font-size: 1rem;
+  padding: 14px 16px; border-radius: 10px; border: 1px solid #4a8a4a;
+  background: #0a2010; color: #eee; font-size: 1rem; width: 100%;
 }
 .btn {
-  padding: 10px; border: none; border-radius: 8px; cursor: pointer;
-  font-size: 1rem; font-weight: bold; transition: all .15s;
+  padding: 14px; border: none; border-radius: 10px; cursor: pointer;
+  font-size: 1rem; font-weight: bold; width: 100%; min-height: 50px;
+  transition: opacity .1s;
 }
-.btn:hover { opacity: .85; transform: translateY(-1px); }
+.btn:active { opacity: .75; }
 .btn-primary   { background: #2a7a40; color: #fff; }
 .btn-secondary { background: #1a4a80; color: #fff; }
-.divider { border: none; border-top: 1px solid #3a6a3a; }
+.divider { border: none; border-top: 1px solid #3a6a3a; margin: 2px 0; }
 .err-msg { color: #f06060; font-size: .85rem; text-align: center; min-height: 1.2rem; }
 
 /* ── ROOM ── */
 #s-room {
   align-items: center; justify-content: center;
   background: radial-gradient(ellipse at center,#1e6b32 0%,#0d3018 100%);
-  flex-direction: column; gap: 20px;
+  flex-direction: column; gap: 20px; padding: 24px 20px;
+  overflow-y: auto;
 }
 .room-box {
   background: rgba(0,0,0,.5); border: 2px solid #4a8a4a;
-  border-radius: 16px; padding: 28px 36px; width: 380px;
+  border-radius: 16px; padding: 24px 20px;
+  width: 100%; max-width: 400px;
   display: flex; flex-direction: column; gap: 14px;
 }
 .room-code { font-size: 2.2rem; font-weight: bold; text-align: center; color: var(--gold); letter-spacing: 8px; }
-.player-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.player-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .player-list li {
-  background: rgba(255,255,255,.07); padding: 8px 12px; border-radius: 8px;
-  display: flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,.07); padding: 12px 14px; border-radius: 10px;
+  display: flex; align-items: center; gap: 10px; font-size: .95rem;
 }
-.player-dot { width: 10px; height: 10px; background: #4a8; border-radius: 50%; }
+.player-dot { width: 10px; height: 10px; background: #4a8; border-radius: 50%; flex-shrink: 0; }
 
 /* ── GAME ── */
-#s-game { flex-direction: column; background: var(--felt); height: 100vh; overflow: hidden; }
-.game-wrap {
-  flex: 1; display: grid; grid-template-rows: auto 1fr auto;
-  gap: 6px; padding: 6px; overflow: hidden;
+#s-game {
+  flex-direction: column; background: var(--felt);
+  height: 100vh; height: 100dvh; overflow: hidden;
 }
-.opponents-row { display: flex; gap: 8px; justify-content: space-around; align-items: flex-start; }
+
+/* Status bar */
+.status-bar {
+  background: rgba(0,0,0,.6); padding: 6px 12px; font-size: .78rem;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid #2a5a2a; flex-shrink: 0;
+}
+.status-turn  { color: var(--gold); font-weight: bold; white-space: nowrap; }
+.status-phase { color: #a0d0a0; flex: 1; font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-info    { color: #888; font-size: .72rem; white-space: nowrap; }
+
+/* Opponents */
+.opponents-row {
+  display: flex; gap: 6px; padding: 6px 8px;
+  overflow-x: auto; flex-shrink: 0;
+  scrollbar-width: none;
+  background: rgba(0,0,0,.25); border-bottom: 1px solid #1a4a1a;
+}
+.opponents-row::-webkit-scrollbar { display: none; }
 .opponent-panel {
-  background: rgba(0,0,0,.3); border: 1px solid #2a6a2a;
-  border-radius: 10px; padding: 8px 12px; min-width: 160px; max-width: 220px; flex: 1;
+  background: rgba(0,0,0,.35); border: 1px solid #2a6a2a;
+  border-radius: 8px; padding: 6px 8px; flex-shrink: 0; min-width: 110px; max-width: 160px;
 }
-.opp-name { font-weight: bold; font-size: .85rem; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
-.turn-ind { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; animation: pulse 1s infinite; display: none; }
+.opp-name { font-weight: bold; font-size: .76rem; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; }
+.turn-ind { width: 7px; height: 7px; background: var(--gold); border-radius: 50%; animation: pulse 1s infinite; display: none; flex-shrink: 0; }
 .turn-ind.on { display: block; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
-.opp-hand { display: flex; gap: 2px; flex-wrap: wrap; }
-.card-back { width: 38px; height: 56px; background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 1px solid #4a4aaa; border-radius: 5px; }
-.opp-score { font-size: .78rem; color: #aaa; margin-top: 4px; }
+.opp-hand { display: flex; gap: 2px; overflow: hidden; flex-wrap: wrap; max-height: 38px; }
+.card-back { width: 22px; height: 33px; background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 1px solid #4a4aaa; border-radius: 3px; flex-shrink: 0; }
+.opp-score { font-size: .67rem; color: #9a9; margin-top: 3px; }
 
-.center-area { display: grid; grid-template-columns: 200px 1fr 200px; gap: 8px; align-items: start; overflow: hidden; }
-.field-area { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.field-label { font-size: .75rem; color: #9a9; letter-spacing: 2px; }
-.field-cards { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 400px; }
+/* Field area */
+.field-section {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  gap: 8px; padding: 6px 8px; overflow: hidden; min-height: 0;
+}
+.field-cards {
+  display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;
+  align-content: center; flex: 1;
+  max-width: calc(100% - 68px); max-height: 100%;
+}
+.deck-area { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
 .deck-pile {
   width: var(--card-w); height: var(--card-h);
   background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 2px solid #4a4aaa;
   border-radius: 8px; display: flex; align-items: center; justify-content: center;
-  flex-direction: column; gap: 4px; position: relative;
+  flex-direction: column; gap: 2px;
 }
-.deck-count-lbl { font-size: .72rem; color: var(--gold); font-weight: bold; }
+.deck-count-lbl { font-size: .62rem; color: var(--gold); font-weight: bold; }
 
-.score-panel {
-  background: rgba(0,0,0,.35); border: 1px solid #2a5a2a;
-  border-radius: 10px; padding: 8px 10px; font-size: .78rem;
+/* My info bar */
+.my-info-bar {
+  background: rgba(0,0,0,.4); border-top: 1px solid #2a4a2a;
+  padding: 5px 10px; flex-shrink: 0;
 }
-.score-title { font-weight: bold; color: var(--gold); margin-bottom: 4px; font-size: .82rem; }
-.score-row { display: flex; justify-content: space-between; margin: 2px 0; }
-.score-val { color: var(--gold); font-weight: bold; }
+.score-compact {
+  font-size: .74rem; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.score-compact .sc-total { color: var(--gold); font-weight: bold; font-size: .82rem; }
+.score-compact .sc-item  { color: #bbb; }
+.score-compact .sc-item span { color: var(--gold); font-weight: bold; }
+.captured-toggle { font-size: .68rem; color: #7a9; cursor: pointer; margin-top: 3px; display: inline-block; padding: 2px 0; }
+.captured-area { display: none; flex-wrap: wrap; gap: 2px; margin-top: 4px; max-height: 50px; overflow-y: auto; }
+.captured-area.open { display: flex; }
+.captured-area .card { width: 28px; height: 42px; }
 
-.my-area { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-bottom: 6px; }
-.my-hand { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+/* My hand */
+.my-hand-section {
+  background: rgba(0,0,0,.45); border-top: 1px solid #2a4a2a;
+  padding: 6px 8px 8px; flex-shrink: 0;
+}
+.hand-label { font-size: .68rem; color: #7a9; margin-bottom: 5px; }
+.my-hand {
+  display: flex; gap: 5px;
+  overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.my-hand::-webkit-scrollbar { display: none; }
 
 /* ── CARDS ── */
 .card {
   width: var(--card-w); height: var(--card-h);
-  border-radius: 7px; border: 2px solid rgba(255,255,255,.2);
-  cursor: pointer; transition: transform .15s, box-shadow .15s;
+  border-radius: 6px; border: 2px solid rgba(255,255,255,.2);
+  cursor: pointer; transition: transform .12s, box-shadow .12s;
   user-select: none; position: relative; flex-shrink: 0;
   overflow: hidden; background-color: #fff;
 }
-.card:hover { transform: translateY(-6px); box-shadow: 0 8px 20px rgba(0,0,0,.5); }
-.card.selected { transform: translateY(-12px); box-shadow: 0 0 0 3px var(--gold), 0 10px 24px rgba(0,0,0,.6); }
-.card.highlight { box-shadow: 0 0 0 3px #80f080 !important; transform: translateY(-4px); }
-.card.dim { opacity: .35; pointer-events: none; }
+.card:active { opacity: .82; }
+.card.selected { transform: translateY(-10px); box-shadow: 0 0 0 3px var(--gold), 0 8px 20px rgba(0,0,0,.6); }
+.card.highlight { box-shadow: 0 0 0 3px #60e060 !important; transform: translateY(-5px); }
+.card.dim { opacity: .3; pointer-events: none; }
 .double-badge {
   position: absolute; top: 2px; right: 2px;
-  background: #ff4444; color: #fff; font-size: .5rem;
-  padding: 1px 3px; border-radius: 3px; font-weight: bold;
+  background: #f03333; color: #fff; font-size: .45rem;
+  padding: 1px 3px; border-radius: 2px; font-weight: bold;
 }
-
-/* ── STATUS BAR ── */
-.status-bar {
-  background: rgba(0,0,0,.5); padding: 6px 14px; font-size: .85rem;
-  display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #2a5a2a; flex-shrink: 0;
-}
-.status-turn  { color: var(--gold); font-weight: bold; }
-.status-phase { color: #a0d0a0; }
 
 /* ── OVERLAYS ── */
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.75);
+  position: fixed; inset: 0; background: rgba(0,0,0,.82);
   display: none; align-items: center; justify-content: center;
-  z-index: 100; flex-direction: column; gap: 20px;
+  z-index: 100; flex-direction: column; gap: 16px; padding: 20px;
 }
 .overlay.active { display: flex; }
 .overlay-box {
-  background: rgba(10,30,10,.96); border: 2px solid var(--gold);
-  border-radius: 16px; padding: 32px 48px; text-align: center;
-  display: flex; flex-direction: column; gap: 16px;
+  background: rgba(8,25,8,.97); border: 2px solid var(--gold);
+  border-radius: 18px; padding: 28px 24px; text-align: center;
+  display: flex; flex-direction: column; gap: 14px;
+  width: 100%; max-width: 340px;
 }
-.overlay-title { font-size: 1.6rem; font-weight: bold; color: var(--gold); }
-.overlay-sub   { color: #ccc; font-size: 1rem; }
-.btn-group { display: flex; gap: 12px; justify-content: center; }
-.btn-go   { background: #c04020; color: #fff; font-size: 1.1rem; padding: 12px 28px; }
-.btn-stop { background: #204090; color: #fff; font-size: 1.1rem; padding: 12px 28px; }
+.overlay-title { font-size: 1.4rem; font-weight: bold; color: var(--gold); }
+.overlay-sub   { color: #ccc; font-size: .95rem; }
+.btn-group { display: flex; gap: 10px; }
+.btn-go   { flex: 1; background: #b83018; color: #fff; font-size: 1.1rem; padding: 16px; border-radius: 12px; border: none; font-weight: bold; min-height: 56px; cursor: pointer; }
+.btn-stop { flex: 1; background: #183878; color: #fff; font-size: 1.1rem; padding: 16px; border-radius: 12px; border: none; font-weight: bold; min-height: 56px; cursor: pointer; }
+.btn-go:active   { opacity: .8; }
+.btn-stop:active { opacity: .8; }
 
 /* ── GAME OVER ── */
 #s-gameover {
   align-items: center; justify-content: center;
   background: radial-gradient(ellipse at center,#1e6b32,#0d3018);
-  flex-direction: column; gap: 20px;
+  flex-direction: column; gap: 16px; padding: 20px;
+  overflow-y: auto;
 }
 .gameover-box {
-  background: rgba(0,0,0,.6); border: 2px solid var(--gold);
-  border-radius: 16px; padding: 28px 40px; min-width: 360px; max-width: 520px;
+  background: rgba(0,0,0,.65); border: 2px solid var(--gold);
+  border-radius: 18px; padding: 24px 20px;
+  width: 100%; max-width: 420px;
 }
-.gameover-title { font-size: 1.8rem; color: var(--gold); text-align: center; margin-bottom: 16px; }
+.gameover-title { font-size: 1.6rem; color: var(--gold); text-align: center; margin-bottom: 14px; }
 .result-row {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.1); gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.1); gap: 8px;
 }
-.result-row.winner { color: var(--gold); font-weight: bold; font-size: 1.05rem; }
+.result-row.winner { color: var(--gold); font-weight: bold; }
 
-/* ── CHAT ── */
-.chat-panel {
-  position: fixed; right: 8px; bottom: 8px; width: 220px;
-  background: rgba(0,0,0,.6); border: 1px solid #2a5a2a;
-  border-radius: 10px; display: flex; flex-direction: column; z-index: 50;
+/* ── CHAT FAB ── */
+.chat-fab {
+  position: fixed; right: 14px; bottom: 14px;
+  width: 50px; height: 50px; border-radius: 50%;
+  background: #2a6030; border: 2px solid #4a8a4a;
+  font-size: 1.3rem; cursor: pointer;
+  display: none; align-items: center; justify-content: center;
+  z-index: 50; box-shadow: 0 3px 10px rgba(0,0,0,.5);
 }
-.chat-messages { height: 110px; overflow-y: auto; padding: 6px 8px; font-size: .75rem; display: flex; flex-direction: column; gap: 3px; }
-.chat-msg { line-height: 1.3; word-break: break-all; }
+.chat-fab.visible { display: flex; }
+.chat-fab:active { opacity: .8; }
+.chat-badge {
+  position: absolute; top: -2px; right: -2px; width: 16px; height: 16px;
+  background: #e03030; border-radius: 50%; font-size: .55rem; color: #fff;
+  display: none; align-items: center; justify-content: center;
+}
+.chat-badge.show { display: flex; }
+
+/* ── CHAT SHEET ── */
+.chat-sheet {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(5,18,5,.97); border-top: 2px solid #2a5a2a;
+  border-radius: 16px 16px 0 0; z-index: 60;
+  flex-direction: column; max-height: 55vh;
+  display: flex; transform: translateY(100%);
+  transition: transform .25s cubic-bezier(.4,0,.2,1);
+}
+.chat-sheet.open { transform: translateY(0); }
+.chat-sheet-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid #2a4a2a; flex-shrink: 0;
+}
+.chat-sheet-title { font-weight: bold; color: var(--gold); font-size: .9rem; }
+.chat-close { background: none; border: none; color: #999; font-size: 1.2rem; cursor: pointer; padding: 4px 8px; }
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 8px 14px;
+  font-size: .8rem; display: flex; flex-direction: column; gap: 4px;
+}
+.chat-msg { line-height: 1.4; word-break: break-all; }
 .chat-msg .cn { color: var(--gold); font-weight: bold; }
-.chat-msg.sys { color: #a0c0a0; font-style: italic; }
-.chat-row { display: flex; gap: 4px; padding: 4px; }
-.chat-input { flex: 1; background: rgba(255,255,255,.08); border: 1px solid #3a6a3a; border-radius: 5px; color: #eee; padding: 4px 6px; font-size: .75rem; }
-.btn-chat { background: #2a5a30; color: #fff; border: none; border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: .75rem; }
-
-.captured-toggle { font-size: .73rem; color: #8a8; cursor: pointer; text-decoration: underline; }
-.captured-area { display: none; flex-wrap: wrap; gap: 2px; max-height: 60px; overflow-y: auto; }
-.captured-area.open { display: flex; }
-.captured-area .card { width: 32px; height: 48px; }
+.chat-msg.sys { color: #90b890; font-style: italic; }
+.chat-input-row {
+  display: flex; gap: 6px; padding: 8px 12px;
+  border-top: 1px solid #2a4a2a; flex-shrink: 0;
+}
+.chat-input {
+  flex: 1; background: rgba(255,255,255,.1); border: 1px solid #3a6a3a;
+  border-radius: 8px; color: #eee; padding: 10px 12px; font-size: .9rem;
+}
+.btn-chat {
+  background: #2a6030; color: #fff; border: none; border-radius: 8px;
+  padding: 10px 16px; font-size: .9rem; font-weight: bold; cursor: pointer;
+}
+.btn-chat:active { opacity: .8; }
 </style>
 </head>
 <body>
 
 <!-- ══ LOBBY ══ -->
 <div id="s-lobby" class="screen active">
-  <div style="text-align:center">
-    <div style="font-size:3rem">🎴</div>
-    <div style="font-size:1.6rem;color:var(--gold);font-weight:bold">온라인 고스톱</div>
-    <div style="font-size:.85rem;color:#888;margin-top:4px">2~4인 멀티플레이어</div>
+  <div class="lobby-header">
+    <div class="lobby-emoji">🎴</div>
+    <div class="lobby-title-text">온라인 고스톱</div>
+    <div class="lobby-sub">2~4인 멀티플레이어</div>
   </div>
   <div class="lobby-box">
-    <div class="lobby-title">입장</div>
     <label>닉네임</label>
     <input id="inp-name" placeholder="이름을 입력하세요" maxlength="10">
     <button class="btn btn-primary" onclick="createRoom()">방 만들기</button>
@@ -236,55 +322,33 @@ body {
 </div>
 
 <!-- ══ GAME ══ -->
-<div id="s-game" class="screen" style="flex-direction:column">
+<div id="s-game" class="screen">
   <div class="status-bar">
-    <span>🎴 고스톱</span>
     <span class="status-turn" id="status-turn"></span>
     <span class="status-phase" id="status-phase"></span>
-    <span style="margin-left:auto;font-size:.8rem;color:#888">덱: <span id="deck-count">0</span>장</span>
+    <span class="deck-info">덱 <span id="deck-count">0</span>장</span>
   </div>
-  <div class="game-wrap">
-    <div class="opponents-row" id="opponents-row"></div>
-    <div class="center-area">
-      <div id="panel-left">
-        <div class="score-panel" id="my-score-panel">
-          <div class="score-title">📊 내 점수</div>
-        </div>
+  <div class="opponents-row" id="opponents-row"></div>
+  <div class="field-section">
+    <div class="field-cards" id="field-cards"></div>
+    <div class="deck-area">
+      <div class="deck-pile">
+        <span style="font-size:1.3rem">🀫</span>
+        <span class="deck-count-lbl" id="deck-count2">0</span>
       </div>
-      <div class="field-area">
-        <div class="field-label">◆ 바닥 ◆</div>
-        <div class="field-cards" id="field-cards"></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:4px">
-          <div class="deck-pile">
-            <span style="font-size:1.5rem">🀫</span>
-            <span class="deck-count-lbl" id="deck-count2">0</span>
-          </div>
-          <div style="font-size:.72rem;color:#888">덱</div>
-        </div>
-      </div>
-      <div id="panel-right">
-        <div class="score-panel">
-          <div class="score-title">📖 점수 기준</div>
-          <div style="color:#aaa;font-size:.72rem;line-height:1.7">
-            광 3장: 3점 (비광: 2점)<br>
-            광 4장: 4점 / 5장: 15점<br>
-            열끗 5장~: 1점+<br>
-            홍/청/초단: 각 +3점<br>
-            띠 5장~: 1점+<br>
-            피 10장~: 1점+<br>
-            <span style="color:var(--gold)">★ 3점 이상 → 고스톱!</span>
-          </div>
-        </div>
-      </div>
+      <div style="font-size:.62rem;color:#777;margin-top:1px">덱</div>
     </div>
-    <div class="my-area">
-      <div style="font-size:.78rem;color:#8a8">✋ 내 손패 (<span id="my-hand-count">0</span>장)</div>
-      <div class="my-hand" id="my-hand"></div>
-      <div class="captured-toggle" onclick="document.getElementById('my-captured').classList.toggle('open')">
-        내 획득 카드 펼치기 ▾
-      </div>
-      <div class="captured-area" id="my-captured"></div>
+  </div>
+  <div class="my-info-bar">
+    <div class="score-compact" id="my-score-panel">
+      <span class="sc-total">📊 0점</span>
     </div>
+    <div class="captured-toggle" onclick="document.getElementById('my-captured').classList.toggle('open')">획득 카드 펼치기 ▾</div>
+    <div class="captured-area" id="my-captured"></div>
+  </div>
+  <div class="my-hand-section">
+    <div class="hand-label">✋ 내 손패 (<span id="my-hand-count">0</span>장)</div>
+    <div class="my-hand" id="my-hand"></div>
   </div>
 </div>
 
@@ -293,7 +357,7 @@ body {
   <div class="gameover-box">
     <div class="gameover-title">🏆 게임 종료</div>
     <div id="gameover-results"></div>
-    <button class="btn btn-primary" onclick="location.reload()" style="margin-top:16px;width:100%">처음으로</button>
+    <button class="btn btn-primary" onclick="location.reload()" style="margin-top:14px">처음으로</button>
   </div>
 </div>
 
@@ -302,10 +366,9 @@ body {
   <div class="overlay-box">
     <div class="overlay-title">🔥 고스톱 결정!</div>
     <div class="overlay-sub" id="gostop-msg"></div>
-    <div style="font-size:.8rem;color:#888">Enter=고 / Esc=스톱</div>
     <div class="btn-group">
-      <button class="btn btn-go" onclick="decide('go')">고! 🔥</button>
-      <button class="btn btn-stop" onclick="decide('stop')">스톱 ✋</button>
+      <button class="btn-go"   onclick="decide('go')">고! 🔥</button>
+      <button class="btn-stop" onclick="decide('stop')">스톱 ✋</button>
     </div>
   </div>
 </div>
@@ -317,10 +380,20 @@ body {
   </div>
 </div>
 
-<!-- ══ CHAT ══ -->
-<div class="chat-panel" id="chat-panel" style="display:none">
+<!-- ══ CHAT FAB ══ -->
+<button class="chat-fab" id="chat-fab" onclick="toggleChat()">
+  💬
+  <span class="chat-badge" id="chat-badge">!</span>
+</button>
+
+<!-- ══ CHAT SHEET ══ -->
+<div class="chat-sheet" id="chat-sheet">
+  <div class="chat-sheet-header">
+    <span class="chat-sheet-title">💬 채팅</span>
+    <button class="chat-close" onclick="toggleChat()">✕</button>
+  </div>
   <div class="chat-messages" id="chat-msgs"></div>
-  <div class="chat-row">
+  <div class="chat-input-row">
     <input class="chat-input" id="chat-inp" placeholder="채팅..." onkeydown="if(event.key==='Enter')sendChat()" maxlength="60">
     <button class="btn-chat" onclick="sendChat()">전송</button>
   </div>
@@ -333,7 +406,6 @@ function makeCard(c, { onClick, extraClass = '' } = {}) {
   d.dataset.id = c.id;
   d.style.backgroundImage = `url('img/cards/${c.id}.png')`;
   d.style.backgroundSize = '100% 100%';
-
   if (c.double) {
     const badge = document.createElement('span');
     badge.className = 'double-badge';
@@ -349,10 +421,21 @@ let myId = null, gs = null;
 let selCard = null;
 let pendingChoices = [];
 let waitField = false, waitDeck = false;
+let chatOpen = false, chatUnread = 0;
 
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
+}
+
+function toggleChat() {
+  chatOpen = !chatOpen;
+  document.getElementById('chat-sheet').classList.toggle('open', chatOpen);
+  if (chatOpen) {
+    chatUnread = 0;
+    document.getElementById('chat-badge').classList.remove('show');
+    setTimeout(() => document.getElementById('chat-inp').focus(), 300);
+  }
 }
 
 function createRoom() {
@@ -376,7 +459,7 @@ function renderPlayers(ps) {
   ul.innerHTML = '';
   ps.forEach((p, i) => {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="player-dot"></span> ${p.name} ${i===0?'<span style="color:var(--gold);font-size:.75rem">(방장)</span>':''}`;
+    li.innerHTML = `<span class="player-dot"></span> ${p.name}${i===0?' <span style="color:var(--gold);font-size:.75rem">(방장)</span>':''}`;
     ul.appendChild(li);
   });
   document.getElementById('player-count').textContent = ps.length;
@@ -406,7 +489,7 @@ socket.on('err', m => { lobbyErr(m); roomErr(m); });
 
 socket.on('game_started', () => {
   show('s-game');
-  document.getElementById('chat-panel').style.display = '';
+  document.getElementById('chat-fab').classList.add('visible');
 });
 
 socket.on('game_state', state => {
@@ -417,7 +500,7 @@ socket.on('game_state', state => {
 
 socket.on('go_stop_prompt', ({ pid, name, score }) => {
   if (pid === myId) {
-    document.getElementById('gostop-msg').textContent = `현재 점수: ${score}점  ─  계속할까요?`;
+    document.getElementById('gostop-msg').textContent = `현재 점수: ${score}점 — 계속할까요?`;
     document.getElementById('ov-gostop').classList.add('active');
   } else {
     document.getElementById('wait-msg').textContent = `${name}이(가) 고/스톱 결정 중...`;
@@ -435,14 +518,14 @@ socket.on('choose_field_card', ({ card, choices }) => {
   selCard = card;
   pendingChoices = choices;
   renderField(gs.field);
-  setStatus('획득할 바닥 카드를 클릭하세요', true);
+  setStatus('획득할 바닥 카드를 선택하세요', true);
 });
 
 socket.on('choose_deck_field_card', ({ card, choices }) => {
   waitDeck = true;
   pendingChoices = choices;
   renderField(gs.field);
-  setStatus(`덱 카드(${MI[card.month]?.e}) — 획득할 바닥 카드를 클릭하세요`, true);
+  setStatus(`${card.month}월 덱카드 — 획득할 바닥 카드를 선택하세요`, true);
 });
 
 socket.on('chat', d => addChat(d));
@@ -541,14 +624,14 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid) {
     div.innerHTML = `
       <div class="opp-name">
         <span class="turn-ind ${cur?'on':''}"></span>
-        ${nm[pid]} ${gc>0?`<span style="color:#f06020;font-size:.7rem">${gc}고</span>`:''}
+        ${nm[pid]}${gc>0?` <span style="color:#f06020;font-size:.65rem">${gc}고</span>`:''}
       </div>
       <div class="opp-hand" id="oh-${pid}"></div>
-      <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열끗${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>`;
+      <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>`;
     const hd = div.querySelector(`#oh-${pid}`);
-    const n = Math.min(hs[pid]||0, 12);
+    const n = Math.min(hs[pid]||0, 10);
     for (let i=0;i<n;i++) { const b=document.createElement('div'); b.className='card-back'; hd.appendChild(b); }
-    if ((hs[pid]||0)>12) { const s=document.createElement('span'); s.style.cssText='font-size:.7rem;color:#888;align-self:center;margin-left:2px'; s.textContent=`+${hs[pid]-12}`; hd.appendChild(s); }
+    if ((hs[pid]||0)>10) { const s=document.createElement('span'); s.style.cssText='font-size:.65rem;color:#888;align-self:center'; s.textContent=`+${(hs[pid]||0)-10}`; hd.appendChild(s); }
     row.appendChild(div);
   });
 }
@@ -557,11 +640,11 @@ function renderMyScore(sc) {
   if (!sc) return;
   const { score, breakdown, counts } = sc;
   document.getElementById('my-score-panel').innerHTML = `
-    <div class="score-title">📊 내 점수: ${score}점</div>
-    <div class="score-row"><span>광 (${counts.gwang}개)</span><span class="score-val">${breakdown.gwang||0}점</span></div>
-    <div class="score-row"><span>열끗 (${counts.yeol}개)</span><span class="score-val">${breakdown.yeol||0}점</span></div>
-    <div class="score-row"><span>띠 (${counts.ribbon}개)</span><span class="score-val">${breakdown.ribbon||0}점</span></div>
-    <div class="score-row"><span>피 (${counts.pi}개)</span><span class="score-val">${breakdown.pi||0}점</span></div>`;
+    <span class="sc-total">📊 ${score}점</span>
+    <span class="sc-item">광<span>${counts.gwang}</span></span>
+    <span class="sc-item">열끗<span>${counts.yeol}</span></span>
+    <span class="sc-item">띠<span>${counts.ribbon}</span></span>
+    <span class="sc-item">피<span>${counts.pi}</span></span>`;
 }
 
 function handClick(card) {
@@ -584,7 +667,7 @@ function handClick(card) {
     pendingChoices = matches.map(c => c.id);
     renderField(gs.field);
     renderMyHand(gs.myHand, true);
-    setStatus('획득할 바닥 카드를 클릭하세요', true);
+    setStatus('획득할 바닥 카드를 선택하세요', true);
   }
 }
 
@@ -613,7 +696,10 @@ function doPlay(card, fid) {
 function decide(d) {
   document.getElementById('ov-gostop').classList.remove('active');
   socket.emit('go_stop', { decision: d });
-  if (d === 'go') { document.getElementById('wait-msg').textContent = '다른 플레이어를 기다리는 중...'; }
+  if (d === 'go') {
+    document.getElementById('wait-msg').textContent = '다른 플레이어를 기다리는 중...';
+    document.getElementById('ov-wait').classList.add('active');
+  }
 }
 
 function addChat(d) {
@@ -624,6 +710,12 @@ function addChat(d) {
   else div.innerHTML = `<span class="cn">${d.name}:</span> ${d.msg}`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+  if (!chatOpen) {
+    chatUnread++;
+    const badge = document.getElementById('chat-badge');
+    badge.textContent = chatUnread > 9 ? '!' : chatUnread;
+    badge.classList.add('show');
+  }
 }
 function sysChat(m) { addChat({ system: true, msg: m }); }
 function sendChat() {
@@ -633,15 +725,6 @@ function sendChat() {
   socket.emit('chat', { msg: m });
   inp.value = '';
 }
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && document.getElementById('ov-gostop').classList.contains('active')) decide('go');
-  if (e.key === 'Escape') {
-    if (document.getElementById('ov-gostop').classList.contains('active')) decide('stop');
-    selCard = null; pendingChoices = [];
-    if (gs) { renderField(gs.field); renderMyHand(gs.myHand, gs.isMyTurn && gs.phase==='play'); }
-  }
-});
 
 document.getElementById('inp-name').focus();
 </script>
