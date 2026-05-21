@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎴 온라인 고스톱</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --felt: #1a5c2a;
+  --felt-dark: #123d1c;
+  --gold: #f0c040;
+  --gwang-bg: linear-gradient(145deg,#7a5200,#e8a800);
+  --yeol-bg: linear-gradient(145deg,#2d0060,#7b40d0);
+  --hong-bg: linear-gradient(145deg,#700010,#d02030);
+  --cheong-bg: linear-gradient(145deg,#001870,#2060d0);
+  --plain-bg: linear-gradient(145deg,#004010,#208040);
+  --pi-bg: linear-gradient(145deg,#1a1a1a,#404040);
+  --card-w: 62px;
+  --card-h: 92px;
+}
+
+body {
+  font-family: 'Malgun Gothic', sans-serif;
+  background: var(--felt-dark);
+  color: #eee;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen { display: none; width: 100%; height: 100%; }
+.screen.active { display: flex; }
+
+/* ── LOBBY ── */
+#s-lobby {
+  align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center,#1e6b32 0%,#0d3018 100%);
+  flex-direction: column; gap: 20px;
+}
+.lobby-box {
+  background: rgba(0,0,0,.5); border: 2px solid #4a8a4a;
+  border-radius: 16px; padding: 32px 40px; width: 360px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.lobby-title { font-size: 2rem; font-weight: bold; text-align: center; color: var(--gold); text-shadow: 0 0 20px rgba(240,192,64,.6); }
+.lobby-box label { font-size: .85rem; color: #aaa; margin-bottom: -8px; }
+.lobby-box input {
+  padding: 10px 14px; border-radius: 8px; border: 1px solid #4a8a4a;
+  background: #0a2010; color: #eee; font-size: 1rem;
+}
+.btn {
+  padding: 10px; border: none; border-radius: 8px; cursor: pointer;
+  font-size: 1rem; font-weight: bold; transition: all .15s;
+}
+.btn:hover { opacity: .85; transform: translateY(-1px); }
+.btn-primary   { background: #2a7a40; color: #fff; }
+.btn-secondary { background: #1a4a80; color: #fff; }
+.divider { border: none; border-top: 1px solid #3a6a3a; }
+.err-msg { color: #f06060; font-size: .85rem; text-align: center; min-height: 1.2rem; }
+
+/* ── ROOM ── */
+#s-room {
+  align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center,#1e6b32 0%,#0d3018 100%);
+  flex-direction: column; gap: 20px;
+}
+.room-box {
+  background: rgba(0,0,0,.5); border: 2px solid #4a8a4a;
+  border-radius: 16px; padding: 28px 36px; width: 380px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.room-code { font-size: 2.2rem; font-weight: bold; text-align: center; color: var(--gold); letter-spacing: 8px; }
+.player-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.player-list li {
+  background: rgba(255,255,255,.07); padding: 8px 12px; border-radius: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.player-dot { width: 10px; height: 10px; background: #4a8; border-radius: 50%; }
+
+/* ── GAME ── */
+#s-game { flex-direction: column; background: var(--felt); height: 100vh; overflow: hidden; }
+.game-wrap {
+  flex: 1; display: grid; grid-template-rows: auto 1fr auto;
+  gap: 6px; padding: 6px; overflow: hidden;
+}
+.opponents-row { display: flex; gap: 8px; justify-content: space-around; align-items: flex-start; }
+.opponent-panel {
+  background: rgba(0,0,0,.3); border: 1px solid #2a6a2a;
+  border-radius: 10px; padding: 8px 12px; min-width: 160px; max-width: 220px; flex: 1;
+}
+.opp-name { font-weight: bold; font-size: .85rem; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.turn-ind { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; animation: pulse 1s infinite; display: none; }
+.turn-ind.on { display: block; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
+.opp-hand { display: flex; gap: 2px; flex-wrap: wrap; }
+.card-back { width: 38px; height: 56px; background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 1px solid #4a4aaa; border-radius: 5px; }
+.opp-score { font-size: .78rem; color: #aaa; margin-top: 4px; }
+
+.center-area { display: grid; grid-template-columns: 200px 1fr 200px; gap: 8px; align-items: start; overflow: hidden; }
+.field-area { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.field-label { font-size: .75rem; color: #9a9; letter-spacing: 2px; }
+.field-cards { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 400px; }
+.deck-pile {
+  width: var(--card-w); height: var(--card-h);
+  background: linear-gradient(145deg,#1a1a6a,#2a2aaa); border: 2px solid #4a4aaa;
+  border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 4px; position: relative;
+}
+.deck-count-lbl { font-size: .72rem; color: var(--gold); font-weight: bold; }
+
+.score-panel {
+  background: rgba(0,0,0,.35); border: 1px solid #2a5a2a;
+  border-radius: 10px; padding: 8px 10px; font-size: .78rem;
+}
+.score-title { font-weight: bold; color: var(--gold); margin-bottom: 4px; font-size: .82rem; }
+.score-row { display: flex; justify-content: space-between; margin: 2px 0; }
+.score-val { color: var(--gold); font-weight: bold; }
+
+.my-area { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-bottom: 6px; }
+.my-hand { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+
+/* ── CARDS ── */
+.card {
+  width: var(--card-w); height: var(--card-h);
+  border-radius: 7px; border: 2px solid rgba(255,255,255,.2);
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: space-between; padding: 3px 2px;
+  cursor: pointer; transition: transform .15s, box-shadow .15s;
+  user-select: none; position: relative; font-size: .62rem;
+  text-shadow: 0 1px 3px rgba(0,0,0,.8); flex-shrink: 0;
+}
+.card:hover { transform: translateY(-6px); box-shadow: 0 8px 20px rgba(0,0,0,.5); }
+.card.selected { transform: translateY(-12px); box-shadow: 0 0 0 3px var(--gold), 0 10px 24px rgba(0,0,0,.6); }
+.card.highlight { box-shadow: 0 0 0 3px #80f080 !important; transform: translateY(-4px); }
+.card.dim { opacity: .35; pointer-events: none; }
+.card-gwang    { background: var(--gwang-bg);  border-color: #f0c040; color: #fff0a0; }
+.card-yeolkkut { background: var(--yeol-bg);   border-color: #c080f0; color: #f0d0ff; }
+.card-hong     { background: var(--hong-bg);   border-color: #f08080; color: #ffd0d0; }
+.card-cheong   { background: var(--cheong-bg); border-color: #80a0f0; color: #d0e0ff; }
+.card-plain    { background: var(--plain-bg);  border-color: #80d080; color: #d0ffd0; }
+.card-pi       { background: var(--pi-bg);     border-color: #707070; color: #cccccc; }
+.card-month  { font-size: .68rem; font-weight: bold; align-self: flex-start; opacity: .9; }
+.card-emoji  { font-size: 1.3rem; line-height: 1; }
+.card-type   { font-size: .72rem; font-weight: bold; }
+.card-name   { font-size: .58rem; opacity: .8; align-self: flex-end; }
+.double-badge {
+  position: absolute; top: 2px; right: 2px;
+  background: #ff4444; color: #fff; font-size: .5rem;
+  padding: 1px 3px; border-radius: 3px; font-weight: bold;
+}
+
+/* ── STATUS BAR ── */
+.status-bar {
+  background: rgba(0,0,0,.5); padding: 6px 14px; font-size: .85rem;
+  display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #2a5a2a; flex-shrink: 0;
+}
+.status-turn  { color: var(--gold); font-weight: bold; }
+.status-phase { color: #a0d0a0; }
+
+/* ── OVERLAYS ── */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.75);
+  display: none; align-items: center; justify-content: center;
+  z-index: 100; flex-direction: column; gap: 20px;
+}
+.overlay.active { display: flex; }
+.overlay-box {
+  background: rgba(10,30,10,.96); border: 2px solid var(--gold);
+  border-radius: 16px; padding: 32px 48px; text-align: center;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.overlay-title { font-size: 1.6rem; font-weight: bold; color: var(--gold); }
+.overlay-sub   { color: #ccc; font-size: 1rem; }
+.btn-group { display: flex; gap: 12px; justify-content: center; }
+.btn-go   { background: #c04020; color: #fff; font-size: 1.1rem; padding: 12px 28px; }
+.btn-stop { background: #204090; color: #fff; font-size: 1.1rem; padding: 12px 28px; }
+
+/* ── GAME OVER ── */
+#s-gameover {
+  align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center,#1e6b32,#0d3018);
+  flex-direction: column; gap: 20px;
+}
+.gameover-box {
+  background: rgba(0,0,0,.6); border: 2px solid var(--gold);
+  border-radius: 16px; padding: 28px 40px; min-width: 360px; max-width: 520px;
+}
+.gameover-title { font-size: 1.8rem; color: var(--gold); text-align: center; margin-bottom: 16px; }
+.result-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.1); gap: 12px;
+}
+.result-row.winner { color: var(--gold); font-weight: bold; font-size: 1.05rem; }
+
+/* ── CHAT ── */
+.chat-panel {
+  position: fixed; right: 8px; bottom: 8px; width: 220px;
+  background: rgba(0,0,0,.6); border: 1px solid #2a5a2a;
+  border-radius: 10px; display: flex; flex-direction: column; z-index: 50;
+}
+.chat-messages { height: 110px; overflow-y: auto; padding: 6px 8px; font-size: .75rem; display: flex; flex-direction: column; gap: 3px; }
+.chat-msg { line-height: 1.3; word-break: break-all; }
+.chat-msg .cn { color: var(--gold); font-weight: bold; }
+.chat-msg.sys { color: #a0c0a0; font-style: italic; }
+.chat-row { display: flex; gap: 4px; padding: 4px; }
+.chat-input { flex: 1; background: rgba(255,255,255,.08); border: 1px solid #3a6a3a; border-radius: 5px; color: #eee; padding: 4px 6px; font-size: .75rem; }
+.btn-chat { background: #2a5a30; color: #fff; border: none; border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: .75rem; }
+
+.captured-toggle { font-size: .73rem; color: #8a8; cursor: pointer; text-decoration: underline; }
+.captured-area { display: none; flex-wrap: wrap; gap: 2px; max-height: 60px; overflow-y: auto; }
+.captured-area.open { display: flex; }
+.captured-area .card { width: 32px; height: 48px; }
+.captured-area .card-emoji { font-size: .8rem; }
+.captured-area .card-type { font-size: .5rem; }
+</style>
+</head>
+<body>
+
+<!-- ══ LOBBY ══ -->
+<div id="s-lobby" class="screen active">
+  <div style="text-align:center">
+    <div style="font-size:3rem">🎴</div>
+    <div style="font-size:1.6rem;color:var(--gold);font-weight:bold">온라인 고스톱</div>
+    <div style="font-size:.85rem;color:#888;margin-top:4px">2~4인 멀티플레이어</div>
+  </div>
+  <div class="lobby-box">
+    <div class="lobby-title">입장</div>
+    <label>닉네임</label>
+    <input id="inp-name" placeholder="이름을 입력하세요" maxlength="10">
+    <button class="btn btn-primary" onclick="createRoom()">방 만들기</button>
+    <hr class="divider">
+    <label>방 코드</label>
+    <input id="inp-room" placeholder="예: AB3CD" maxlength="5" style="text-transform:uppercase">
+    <button class="btn btn-secondary" onclick="joinRoom()">방 참가</button>
+    <div class="err-msg" id="lobby-err"></div>
+  </div>
+</div>
+
+<!-- ══ ROOM ══ -->
+<div id="s-room" class="screen">
+  <div class="room-box">
+    <div style="text-align:center;font-size:.85rem;color:#aaa">방 코드</div>
+    <div class="room-code" id="room-code-display">─────</div>
+    <div style="text-align:center;font-size:.8rem;color:#888">이 코드를 친구에게 알려주세요</div>
+    <hr class="divider">
+    <div style="font-size:.85rem;color:#aaa">참가자 (<span id="player-count">0</span>/4명)</div>
+    <ul class="player-list" id="player-list"></ul>
+    <button class="btn btn-primary" id="btn-start" onclick="startGame()" style="display:none">게임 시작 ▶</button>
+    <div class="err-msg" id="room-err"></div>
+    <div style="text-align:center;color:#888;font-size:.8rem" id="waiting-msg">방장이 게임을 시작할 때까지 기다려주세요...</div>
+  </div>
+</div>
+
+<!-- ══ GAME ══ -->
+<div id="s-game" class="screen" style="flex-direction:column">
+  <div class="status-bar">
+    <span>🎴 고스톱</span>
+    <span class="status-turn" id="status-turn"></span>
+    <span class="status-phase" id="status-phase"></span>
+    <span style="margin-left:auto;font-size:.8rem;color:#888">덱: <span id="deck-count">0</span>장</span>
+  </div>
+  <div class="game-wrap">
+    <div class="opponents-row" id="opponents-row"></div>
+    <div class="center-area">
+      <div id="panel-left">
+        <div class="score-panel" id="my-score-panel">
+          <div class="score-title">📊 내 점수</div>
+        </div>
+      </div>
+      <div class="field-area">
+        <div class="field-label">◆ 바닥 ◆</div>
+        <div class="field-cards" id="field-cards"></div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:4px">
+          <div class="deck-pile">
+            <span style="font-size:1.5rem">🀫</span>
+            <span class="deck-count-lbl" id="deck-count2">0</span>
+          </div>
+          <div style="font-size:.72rem;color:#888">덱</div>
+        </div>
+      </div>
+      <div id="panel-right">
+        <div class="score-panel">
+          <div class="score-title">📖 점수 기준</div>
+          <div style="color:#aaa;font-size:.72rem;line-height:1.7">
+            광 3장: 3점 (비광: 2점)<br>
+            광 4장: 4점 / 5장: 15점<br>
+            열끗 5장~: 1점+<br>
+            홍/청/초단: 각 +3점<br>
+            띠 5장~: 1점+<br>
+            피 10장~: 1점+<br>
+            <span style="color:var(--gold)">★ 3점 이상 → 고스톱!</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="my-area">
+      <div style="font-size:.78rem;color:#8a8">✋ 내 손패 (<span id="my-hand-count">0</span>장)</div>
+      <div class="my-hand" id="my-hand"></div>
+      <div class="captured-toggle" onclick="document.getElementById('my-captured').classList.toggle('open')">
+        내 획득 카드 펼치기 ▾
+      </div>
+      <div class="captured-area" id="my-captured"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ GAME OVER ══ -->
+<div id="s-gameover" class="screen">
+  <div class="gameover-box">
+    <div class="gameover-title">🏆 게임 종료</div>
+    <div id="gameover-results"></div>
+    <button class="btn btn-primary" onclick="location.reload()" style="margin-top:16px;width:100%">처음으로</button>
+  </div>
+</div>
+
+<!-- ══ GO/STOP OVERLAY ══ -->
+<div class="overlay" id="ov-gostop">
+  <div class="overlay-box">
+    <div class="overlay-title">🔥 고스톱 결정!</div>
+    <div class="overlay-sub" id="gostop-msg"></div>
+    <div style="font-size:.8rem;color:#888">Enter=고 / Esc=스톱</div>
+    <div class="btn-group">
+      <button class="btn btn-go" onclick="decide('go')">고! 🔥</button>
+      <button class="btn btn-stop" onclick="decide('stop')">스톱 ✋</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ WAIT OVERLAY ══ -->
+<div class="overlay" id="ov-wait">
+  <div class="overlay-box">
+    <div class="overlay-title" id="wait-msg">잠시 기다려주세요...</div>
+  </div>
+</div>
+
+<!-- ══ CHAT ══ -->
+<div class="chat-panel" id="chat-panel" style="display:none">
+  <div class="chat-messages" id="chat-msgs"></div>
+  <div class="chat-row">
+    <input class="chat-input" id="chat-inp" placeholder="채팅..." onkeydown="if(event.key==='Enter')sendChat()" maxlength="60">
+    <button class="btn-chat" onclick="sendChat()">전송</button>
+  </div>
+</div>
+
+<script>
+// ── 상수 ──────────────────────────────────────────────────
+const MI = {
+  1:{e:'🌲',n:'松'}, 2:{e:'🌸',n:'梅'}, 3:{e:'🌺',n:'桜'}, 4:{e:'🌿',n:'藤'},
+  5:{e:'🌷',n:'蘭'}, 6:{e:'🌹',n:'牡丹'}, 7:{e:'🌾',n:'萩'}, 8:{e:'🌕',n:'芒'},
+  9:{e:'🌼',n:'菊'}, 10:{e:'🍁',n:'紅葉'}, 11:{e:'🎋',n:'桐'}, 12:{e:'☔',n:'雨'},
+};
+
+function cardCls(c) {
+  if (c.type === 'gwang')    return 'card-gwang';
+  if (c.type === 'yeolkkut') return 'card-yeolkkut';
+  if (c.type === 'ribbon') {
+    if (c.sub === 'hong')   return 'card-hong';
+    if (c.sub === 'cheong') return 'card-cheong';
+    return 'card-plain';
+  }
+  return 'card-pi';
+}
+
+function typeStr(c) {
+  if (c.type === 'gwang')    return '광';
+  if (c.type === 'yeolkkut') return '열끗';
+  if (c.type === 'ribbon') {
+    if (c.sub === 'hong')   return '홍단';
+    if (c.sub === 'cheong') return '청단';
+    return '평단';
+  }
+  return c.double ? '쌍피' : '피';
+}
+
+function makeCard(c, { onClick, extraClass = '' } = {}) {
+  const d = document.createElement('div');
+  d.className = `card ${cardCls(c)} ${extraClass}`;
+  d.dataset.id = c.id;
+  const mi = MI[c.month] || {e:'?',n:'?'};
+  d.innerHTML = `
+    ${c.double ? '<span class="double-badge">×2</span>' : ''}
+    <span class="card-month">${c.month}월</span>
+    <span class="card-emoji">${mi.e}</span>
+    <span class="card-type">${typeStr(c)}</span>
+    <span class="card-name">${c.name}</span>`;
+  if (onClick) d.addEventListener('click', () => onClick(c));
+  return d;
+}
+
+// ── state ─────────────────────────────────────────────────
+const socket = io();
+let myId = null, gs = null;
+let selCard = null;       // selected hand card
+let pendingChoices = [];  // field card ids to highlight
+let waitField = false, waitDeck = false;
+
+// ── screens ───────────────────────────────────────────────
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ── lobby ─────────────────────────────────────────────────
+function createRoom() {
+  const n = document.getElementById('inp-name').value.trim();
+  if (!n) return lobbyErr('이름을 입력하세요.');
+  socket.emit('create_room', { name: n });
+}
+function joinRoom() {
+  const n = document.getElementById('inp-name').value.trim();
+  const r = document.getElementById('inp-room').value.trim().toUpperCase();
+  if (!n) return lobbyErr('이름을 입력하세요.');
+  if (!r) return lobbyErr('방 코드를 입력하세요.');
+  socket.emit('join_room', { roomId: r, name: n });
+}
+function lobbyErr(m) { document.getElementById('lobby-err').textContent = m; }
+function roomErr(m)  { document.getElementById('room-err').textContent = m; }
+function startGame() { socket.emit('start_game'); }
+
+function renderPlayers(ps) {
+  const ul = document.getElementById('player-list');
+  ul.innerHTML = '';
+  ps.forEach((p, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="player-dot"></span> ${p.name} ${i===0?'<span style="color:var(--gold);font-size:.75rem">(방장)</span>':''}`;
+    ul.appendChild(li);
+  });
+  document.getElementById('player-count').textContent = ps.length;
+}
+
+// ── socket events ─────────────────────────────────────────
+socket.on('room_ready', d => {
+  document.getElementById('room-code-display').textContent = d.roomId;
+  renderPlayers(d.players);
+  if (d.isHost) {
+    document.getElementById('btn-start').style.display = '';
+    document.getElementById('waiting-msg').style.display = 'none';
+  }
+  show('s-room');
+});
+
+socket.on('player_joined', d => {
+  renderPlayers(d.players);
+  sysChat(`${d.players[d.players.length-1].name}님이 참가했습니다.`);
+});
+
+socket.on('player_left', d => {
+  renderPlayers(d.players);
+  sysChat(`${d.name}님이 나갔습니다.`);
+});
+
+socket.on('err', m => { lobbyErr(m); roomErr(m); });
+
+socket.on('game_started', () => {
+  show('s-game');
+  document.getElementById('chat-panel').style.display = '';
+});
+
+socket.on('game_state', state => {
+  gs = state;
+  myId = state.myId;
+  renderAll(state);
+});
+
+socket.on('go_stop_prompt', ({ pid, name, score }) => {
+  if (pid === myId) {
+    document.getElementById('gostop-msg').textContent = `현재 점수: ${score}점  ─  계속할까요?`;
+    document.getElementById('ov-gostop').classList.add('active');
+  } else {
+    document.getElementById('wait-msg').textContent = `${name}이(가) 고/스톱 결정 중...`;
+    document.getElementById('ov-wait').classList.add('active');
+  }
+});
+
+socket.on('player_went', () => {
+  document.getElementById('ov-wait').classList.remove('active');
+  document.getElementById('ov-gostop').classList.remove('active');
+});
+
+socket.on('choose_field_card', ({ card, choices }) => {
+  waitField = true;
+  selCard = card;
+  pendingChoices = choices;
+  renderField(gs.field);
+  setStatus('획득할 바닥 카드를 클릭하세요', true);
+});
+
+socket.on('choose_deck_field_card', ({ card, choices }) => {
+  waitDeck = true;
+  pendingChoices = choices;
+  renderField(gs.field);
+  setStatus(`덱 카드(${MI[card.month]?.e}) — 획득할 바닥 카드를 클릭하세요`, true);
+});
+
+socket.on('chat', d => addChat(d));
+
+socket.on('game_over', ({ winner, nameMap, results }) => {
+  document.getElementById('ov-gostop').classList.remove('active');
+  document.getElementById('ov-wait').classList.remove('active');
+  const sorted = Object.entries(results).sort((a,b) => b[1].total - a[1].total);
+  const el = document.getElementById('gameover-results');
+  el.innerHTML = '';
+  sorted.forEach(([pid, r]) => {
+    const row = document.createElement('div');
+    row.className = `result-row ${pid===winner?'winner':''}`;
+    const go = r.goCount > 0 ? ` (${r.goCount}고 ×${r.mult})` : '';
+    row.innerHTML = `
+      <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
+      <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'}">
+        ${r.score}점${go} = <b>${r.total}점</b><br>
+        광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}
+      </span>`;
+    el.appendChild(row);
+  });
+  show('s-gameover');
+});
+
+// ── render ────────────────────────────────────────────────
+function renderAll(s) {
+  const { myHand, field, captured, handSizes, currentPlayerId,
+          isMyTurn, playerIds, nameMap, scores, goCount, deckSize, phase } = s;
+
+  document.getElementById('deck-count').textContent  = deckSize;
+  document.getElementById('deck-count2').textContent = deckSize;
+  document.getElementById('my-hand-count').textContent = myHand.length;
+
+  if (isMyTurn && phase === 'play') {
+    setStatus('내 차례 — 손패에서 카드를 선택하세요', true);
+  } else if (!isMyTurn) {
+    setStatus(`${nameMap[currentPlayerId]}의 차례`, false);
+    document.getElementById('ov-wait').classList.remove('active');
+  }
+
+  renderField(field);
+  renderMyHand(myHand, isMyTurn && phase === 'play');
+  renderMyCaptured(captured[myId] || []);
+  renderOpponents(playerIds, nameMap, handSizes, captured, scores, goCount, currentPlayerId);
+  renderMyScore(scores[myId]);
+
+  if (isMyTurn) document.getElementById('ov-wait').classList.remove('active');
+}
+
+function setStatus(msg, mine) {
+  document.getElementById('status-turn').textContent  = mine ? '🟢 내 차례' : '⏳';
+  document.getElementById('status-phase').textContent = msg;
+}
+
+function renderField(cards) {
+  const el = document.getElementById('field-cards');
+  el.innerHTML = '';
+  cards.forEach(c => {
+    const isChoice = pendingChoices.includes(c.id) && (waitField || waitDeck);
+    const isMatch  = selCard && !waitField && !waitDeck && gs?.isMyTurn && gs?.phase==='play' && c.month === selCard.month;
+    let ec = '';
+    if (isChoice || isMatch) ec = 'highlight';
+    const onClick = (isChoice || isMatch) ? card => fieldClick(card.id) : null;
+    el.appendChild(makeCard(c, { onClick, extraClass: ec }));
+  });
+}
+
+function renderMyHand(cards, active) {
+  const el = document.getElementById('my-hand');
+  el.innerHTML = '';
+  cards.forEach(c => {
+    const sel = selCard && selCard.id === c.id;
+    const dim = !active;
+    el.appendChild(makeCard(c, {
+      onClick: active ? card => handClick(card) : null,
+      extraClass: `${sel?'selected':''} ${dim?'dim':''}`,
+    }));
+  });
+}
+
+function renderMyCaptured(cards) {
+  const el = document.getElementById('my-captured');
+  el.innerHTML = '';
+  cards.forEach(c => el.appendChild(makeCard(c)));
+}
+
+function renderOpponents(pids, nm, hs, cap, scores, go, curPid) {
+  const row = document.getElementById('opponents-row');
+  row.innerHTML = '';
+  pids.filter(p => p !== myId).forEach(pid => {
+    const sc  = scores[pid] || { score:0, counts:{gwang:0,yeol:0,ribbon:0,pi:0} };
+    const gc  = go[pid] || 0;
+    const cur = pid === curPid;
+    const div = document.createElement('div');
+    div.className = 'opponent-panel';
+    div.innerHTML = `
+      <div class="opp-name">
+        <span class="turn-ind ${cur?'on':''}"></span>
+        ${nm[pid]} ${gc>0?`<span style="color:#f06020;font-size:.7rem">${gc}고</span>`:''}
+      </div>
+      <div class="opp-hand" id="oh-${pid}"></div>
+      <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열끗${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>`;
+    const hd = div.querySelector(`#oh-${pid}`);
+    const n = Math.min(hs[pid]||0, 12);
+    for (let i=0;i<n;i++) { const b=document.createElement('div'); b.className='card-back'; hd.appendChild(b); }
+    if ((hs[pid]||0)>12) { const s=document.createElement('span'); s.style.cssText='font-size:.7rem;color:#888;align-self:center;margin-left:2px'; s.textContent=`+${hs[pid]-12}`; hd.appendChild(s); }
+    row.appendChild(div);
+  });
+}
+
+function renderMyScore(sc) {
+  if (!sc) return;
+  const { score, breakdown, counts } = sc;
+  document.getElementById('my-score-panel').innerHTML = `
+    <div class="score-title">📊 내 점수: ${score}점</div>
+    <div class="score-row"><span>광 (${counts.gwang}개)</span><span class="score-val">${breakdown.gwang||0}점</span></div>
+    <div class="score-row"><span>열끗 (${counts.yeol}개)</span><span class="score-val">${breakdown.yeol||0}점</span></div>
+    <div class="score-row"><span>띠 (${counts.ribbon}개)</span><span class="score-val">${breakdown.ribbon||0}점</span></div>
+    <div class="score-row"><span>피 (${counts.pi}개)</span><span class="score-val">${breakdown.pi||0}점</span></div>`;
+}
+
+// ── interactions ──────────────────────────────────────────
+function handClick(card) {
+  if (!gs || !gs.isMyTurn || gs.phase !== 'play') return;
+  if (waitField || waitDeck) return;
+
+  if (selCard && selCard.id === card.id) {
+    // 같은 카드 재클릭 → play
+    doPlay(card, null);
+    return;
+  }
+
+  selCard = card;
+  const matches = gs.field.filter(c => c.month === card.month);
+
+  if (matches.length === 0 || matches.length === 1 || matches.length >= 3) {
+    renderField(gs.field);
+    renderMyHand(gs.myHand, true);
+    doPlay(card, null);
+  } else {
+    // 2 matches: highlight and wait
+    pendingChoices = matches.map(c => c.id);
+    renderField(gs.field);
+    renderMyHand(gs.myHand, true);
+    setStatus('획득할 바닥 카드를 클릭하세요', true);
+  }
+}
+
+function fieldClick(fid) {
+  if (waitField) {
+    waitField = false;
+    const sc = selCard;
+    selCard = null; pendingChoices = [];
+    socket.emit('play_card', { cardId: sc.id, fieldChoiceId: fid });
+  } else if (waitDeck) {
+    waitDeck = false;
+    pendingChoices = [];
+    socket.emit('choose_deck_field', { fieldChoiceId: fid });
+  } else if (selCard && gs?.isMyTurn) {
+    const sc = selCard;
+    selCard = null; pendingChoices = [];
+    socket.emit('play_card', { cardId: sc.id, fieldChoiceId: fid });
+  }
+}
+
+function doPlay(card, fid) {
+  selCard = null; pendingChoices = [];
+  socket.emit('play_card', { cardId: card.id, fieldChoiceId: fid });
+}
+
+function decide(d) {
+  document.getElementById('ov-gostop').classList.remove('active');
+  socket.emit('go_stop', { decision: d });
+  if (d === 'go') { document.getElementById('wait-msg').textContent = '다른 플레이어를 기다리는 중...'; }
+}
+
+// ── chat ──────────────────────────────────────────────────
+function addChat(d) {
+  const el = document.getElementById('chat-msgs');
+  const div = document.createElement('div');
+  div.className = 'chat-msg' + (d.system ? ' sys' : '');
+  if (d.system) div.textContent = d.msg;
+  else div.innerHTML = `<span class="cn">${d.name}:</span> ${d.msg}`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+function sysChat(m) { addChat({ system: true, msg: m }); }
+function sendChat() {
+  const inp = document.getElementById('chat-inp');
+  const m = inp.value.trim();
+  if (!m) return;
+  socket.emit('chat', { msg: m });
+  inp.value = '';
+}
+
+// ── keyboard ──────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('ov-gostop').classList.contains('active')) decide('go');
+  if (e.key === 'Escape') {
+    if (document.getElementById('ov-gostop').classList.contains('active')) decide('stop');
+    selCard = null; pendingChoices = [];
+    if (gs) { renderField(gs.field); renderMyHand(gs.myHand, gs.isMyTurn && gs.phase==='play'); }
+  }
+});
+
+document.getElementById('inp-name').focus();
+</script>
+</body>
+</html>
