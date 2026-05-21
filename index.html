@@ -331,14 +331,8 @@ function makeCard(c, { onClick, extraClass = '' } = {}) {
   const d = document.createElement('div');
   d.className = `card ${extraClass}`;
   d.dataset.id = c.id;
-
-  const col = c.id % 4;
-  const row = Math.floor(c.id / 4);
-  const xPct = (col / 3 * 100).toFixed(4);
-  const yPct = (row / 11 * 100).toFixed(4);
-  d.style.backgroundImage = "url('img/card.png')";
-  d.style.backgroundSize  = '400% 1200%';
-  d.style.backgroundPosition = `${xPct}% ${yPct}%`;
+  d.style.backgroundImage = `url('img/cards/${c.id}.png')`;
+  d.style.backgroundSize = '100% 100%';
 
   if (c.double) {
     const badge = document.createElement('span');
