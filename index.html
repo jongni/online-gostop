@@ -639,6 +639,17 @@ function joinRoom() {
   socket.emit('join_room', { roomId: r, name: n });
 }
 function startGame() { socket.emit('start_game'); }
+
+// 고 배율 표시 문자열 생성
+// 1고: +1, 2고: +2 추가, 3고~: ×2 누적
+function goScoreLabel(score, goCount) {
+  if (goCount === 0) return `${score}점`;
+  let parts = [`${score}점`];
+  if (goCount >= 1) parts.push('+1');
+  if (goCount >= 2) parts.push('+2');
+  if (goCount >= 3) parts.push(`×${Math.pow(2, goCount - 2)}`);
+  return `(${goCount}고) ${parts.join(' ')}`;
+}
 function lobbyErr(m) { document.getElementById('lobby-err').textContent = m; }
 function roomErr(m)  { document.getElementById('room-err').textContent = m; }
 
@@ -875,11 +886,11 @@ socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOv
   sorted.forEach(([pid, r]) => {
     const row = document.createElement('div');
     row.className = `result-row ${pid===winner?'winner':''}`;
-    const go = r.goCount > 0 ? ` (${r.goCount}고 ×${r.mult})` : '';
+    const go = goScoreLabel(r.score, r.goCount);
     row.innerHTML = `
       <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
       <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'};text-align:right">
-        ${r.score}점${go} = <b>${r.total}점</b><br>
+        ${go} = <b>${r.total}점</b><br>
         <span style="font-size:.7rem">광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}</span>
       </span>`;
     el.appendChild(row);

@@ -120,6 +120,92 @@ def calc_score(captured):
     }
 
 
+def apply_go_bonus(score, go_count):
+    """1고: +1점, 2고: +2점 추가, 3고부터는 ×2 누적 곱셈"""
+    total = score
+    if go_count >= 1:
+        total += 1
+    if go_count >= 2:
+        total += 2
+    if go_count >= 3:
+        total *= 2 ** (go_count - 2)
+    return total
+
+
+def steal_pi_from_opponents(game, pid):
+    """각 상대에게서 피 1장씩 뺏어온다. 쌍피보다 일반 피를 우선 선택."""
+    stolen = 0
+    for opp in game['playerIds']:
+        if opp == pid:
+            continue
+        pi_cards = [c for c in game['captured'][opp] if c['type'] == 'pi']
+        if pi_cards:
+            target = next((c for c in pi_cards if not c['double']), pi_cards[0])
+            game['captured'][opp].remove(target)
+            game['captured'][pid].append(target)
+            stolen += 1
+    return stolen
+
+
+def detect_and_apply_special_events(room, pid):
+    """쪽/따닥/쌓인패/쓸 감지 후 상대 피 뺏기 적용"""
+    game = room['game']
+    last = game.get('lastPlay')
+    if not last:
+        return
+
+    hand_card    = last.get('handCard')
+    deck_card    = last.get('deckCard')
+    hand_cap     = last.get('handCaptured', [])   # id 목록 (hand card 자신 포함)
+    deck_cap     = last.get('deckCaptured', [])   # id 목록 (deck card 자신 포함)
+    field_before = last.get('fieldSizeBefore', 0)
+
+    if not hand_card or not deck_card:
+        return
+
+    events = []
+
+    # ── 규칙3: 쪽 ─ 낸 패가 바닥에 갔다가 덱카드로 잡힌 경우 ──────────
+    # hand_cap == [] (낸 패가 바닥에 그냥 놓임)이고, 덱이 그 패를 가져갔을 때
+    if len(hand_cap) == 0 and hand_card['id'] in deck_cap:
+        events.append('jjok')
+
+    # ── 규칙2: 따닥 ─ 바닥 2장 중 1장은 패로, 나머지는 덱으로 획득 ────
+    # (쪽이 아닌 경우에만 / 같은 월)
+    elif (hand_card['month'] == deck_card['month'] and
+          len(hand_cap) == 2 and          # 낸 패 + 바닥 1장 획득
+          len(deck_cap) >= 2):            # 덱 + 바닥 1장 획득
+        events.append('ddadak')
+
+    # ── 규칙4: 쌓인 패 ─ 바닥 3장이 쌓여 있는 것을 낸 패나 덱으로 획득 ──
+    if len(hand_cap) >= 4:               # 낸 패 + 바닥 3장
+        events.append('ssain')
+    elif len(deck_cap) >= 4:             # 덱 + 바닥 3장
+        events.append('ssain')
+
+    # ── 규칙5: 쓸 ─ 바닥이 정확히 2장이었는데 낸 패+덱으로 싹 비운 경우 ─
+    if (field_before == 2 and
+        len(game['field']) == 0 and
+        len(hand_cap) >= 2 and
+        len(deck_cap) >= 2 and
+        'jjok' not in events):
+        events.append('sseul')
+
+    if not events:
+        return
+
+    name_map = {p['id']: p['name'] for p in room['players']}
+    labels   = {'jjok': '쪽', 'ddadak': '따닥', 'ssain': '쌓인 패', 'sseul': '쓸'}
+
+    for ev in events:
+        n     = steal_pi_from_opponents(game, pid)
+        label = labels[ev]
+        msg   = (f'✨ {name_map[pid]} {label}! — 상대 피 {n}장을 뺏었습니다!'
+                 if n > 0 else
+                 f'✨ {name_map[pid]} {label}! (뺏을 피 없음)')
+        socketio.emit('chat', {'system': True, 'msg': msg}, to=room['id'])
+
+
 def broadcast_state(room):
     game = room.get('game')
     if not game:
@@ -153,6 +239,7 @@ def next_turn(room):
     game['phase'] = 'play'
     game['lastPlay'] = None
     game['pendingHandCard'] = None
+    game['fieldSizeAtTurnStart'] = len(game['field'])
 
 
 def start_actual_game(room, first_pid=None):
@@ -166,14 +253,15 @@ def start_actual_game(room, first_pid=None):
     room['state'] = 'playing'
     room['game'] = {
         'hands': dealt['hands'], 'field': dealt['field'], 'deck': dealt['deck'],
-        'captured':        {pid: [] for pid in pids},
-        'goCount':         {pid: 0  for pid in pids},
-        'playerIds':       pids,
-        'turnIdx':         0,
-        'phase':           'play',
-        'pendingHandCard': None,
-        'pendingDeckCard': None,
-        'lastPlay':        None,
+        'captured':             {pid: [] for pid in pids},
+        'goCount':              {pid: 0  for pid in pids},
+        'playerIds':            pids,
+        'turnIdx':              0,
+        'phase':                'play',
+        'pendingHandCard':      None,
+        'pendingDeckCard':      None,
+        'lastPlay':             None,
+        'fieldSizeAtTurnStart': len(dealt['field']),
     }
     name_map = {p['id']: p['name'] for p in room['players']}
     broadcast_state(room)
@@ -189,12 +277,14 @@ def end_game(room, stopper_id=None):
     name_map = {p['id']: p['name'] for p in room['players']}
     results = {}
     for pid in game['playerIds']:
-        s = calc_score(game['captured'][pid])
-        mult = 2 ** game['goCount'][pid]
+        s  = calc_score(game['captured'][pid])
+        go = game['goCount'][pid]
         results[pid] = {
-            'score': s['score'], 'total': s['score'] * mult, 'mult': mult,
-            'breakdown': s['breakdown'], 'counts': s['counts'],
-            'goCount': game['goCount'][pid],
+            'score':     s['score'],
+            'total':     apply_go_bonus(s['score'], go),
+            'goCount':   go,
+            'breakdown': s['breakdown'],
+            'counts':    s['counts'],
         }
     winner = stopper_id or max(game['playerIds'], key=lambda p: results[p]['total'])
 
@@ -289,6 +379,7 @@ def process_deck_card(room, pid):
 
 def after_deck_card(room, pid):
     game = room['game']
+    detect_and_apply_special_events(room, pid)   # 쪽/따닥/쌓인패/쓸
     all_empty = all(len(game['hands'][p]) == 0 for p in game['playerIds'])
     score = calc_score(game['captured'][pid])['score']
 
@@ -531,8 +622,9 @@ def on_play_card(data):
     game['captured'][pid].extend(result['captured'])
     game['field']    = result['field']
     game['lastPlay'] = {
-        'handCard':     card,
-        'handCaptured': [c['id'] for c in result['captured']],
+        'handCard':       card,
+        'handCaptured':   [c['id'] for c in result['captured']],
+        'fieldSizeBefore': game.get('fieldSizeAtTurnStart', 0),
     }
     game['phase']           = 'deck'
     game['pendingHandCard'] = None
