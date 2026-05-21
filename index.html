@@ -591,6 +591,116 @@ let chatOpen   = false, chatUnread = 0;
 let prevFieldIds = new Set();
 let isHost     = false;
 let fdMyPicked = false;  // 선 결정에서 내가 골랐는지
+let lastPlayedHandCardId = null; // 손패→바닥 카드 ID (덱 뒤집기와 구분)
+
+// ── 효과음 (Web Audio API) ────────────────────────────────────────────
+const _ACtx = window.AudioContext || window.webkitAudioContext;
+let _ac = null;
+
+function _getAC() {
+  if (!_ac && _ACtx) {
+    try { _ac = new _ACtx(); } catch(e) {}
+  }
+  if (_ac && _ac.state === 'suspended') _ac.resume().catch(() => {});
+  return _ac;
+}
+
+// 첫 터치 시 AudioContext 활성화
+document.addEventListener('touchstart', _getAC, { once: true, passive: true });
+document.addEventListener('mousedown',  _getAC, { once: true, passive: true });
+
+function playSound(type) {
+  const ac = _getAC();
+  if (!ac) return;
+  const now = ac.currentTime;
+
+  if (type === 'miss') {
+    // 부드러운 탁- 소리 (손패가 바닥에 떨어짐, 맞는 패 없음)
+    const buf = ac.createBuffer(1, ac.sampleRate * 0.15, ac.sampleRate);
+    const d   = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t   = i / ac.sampleRate;
+      const env = Math.exp(-t * 30);
+      d[i] = ((Math.random() * 2 - 1) * 0.5 + Math.sin(2 * Math.PI * 110 * t) * 0.4) * env;
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.5, now);
+    src.connect(g); g.connect(ac.destination);
+    src.start(now);
+
+  } else if (type === 'capture') {
+    // 짧은 딱- 소리 (패를 먹음)
+    const osc = ac.createOscillator();
+    const g   = ac.createGain();
+    osc.frequency.setValueAtTime(900, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.07);
+    g.gain.setValueAtTime(0.55, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    osc.connect(g); g.connect(ac.destination);
+    osc.start(now); osc.stop(now + 0.1);
+    // 노이즈 클릭 레이어 추가
+    const buf2 = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.04), ac.sampleRate);
+    const d2   = buf2.getChannelData(0);
+    for (let i = 0; i < d2.length; i++) {
+      d2[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ac.sampleRate * 0.008));
+    }
+    const src2 = ac.createBufferSource();
+    src2.buffer = buf2;
+    const g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.35, now);
+    src2.connect(g2); g2.connect(ac.destination);
+    src2.start(now);
+
+  } else if (type === 'flip') {
+    // 휙- 카드 뒤집는 소리 (덱 카드 공개)
+    const dur = 0.28;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const d   = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src    = ac.createBufferSource();
+    src.buffer   = buf;
+    const flt    = ac.createBiquadFilter();
+    flt.type     = 'bandpass';
+    flt.Q.value  = 1.2;
+    flt.frequency.setValueAtTime(300, now);
+    flt.frequency.linearRampToValueAtTime(2200, now + 0.1);
+    flt.frequency.linearRampToValueAtTime(400,  now + dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.3,   now + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(flt); flt.connect(g); g.connect(ac.destination);
+    src.start(now);
+
+  } else if (type === 'win') {
+    // 상승 아르페지오 팡파르 (게임 승리)
+    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5]; // C5 E5 G5 C6 E6
+    notes.forEach((freq, i) => {
+      const t   = now + i * 0.13;
+      const osc = ac.createOscillator();
+      const g   = ac.createGain();
+      osc.type  = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.32, t + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.65);
+      osc.connect(g); g.connect(ac.destination);
+      osc.start(t); osc.stop(t + 0.7);
+      // 하모닉 추가 (옥타브 위 부드럽게)
+      const osc2 = ac.createOscillator();
+      const g2   = ac.createGain();
+      osc2.type  = 'sine';
+      osc2.frequency.setValueAtTime(freq * 2, t);
+      g2.gain.setValueAtTime(0, t);
+      g2.gain.linearRampToValueAtTime(0.1, t + 0.04);
+      g2.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+      osc2.connect(g2); g2.connect(ac.destination);
+      osc2.start(t); osc2.stop(t + 0.55);
+    });
+  }
+}
 
 // ── 유틸 ─────────────────────────────────────────────────────────────
 function makeCard(c, { onClick, extraClass = '' } = {}) {
@@ -873,6 +983,8 @@ socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOv
   document.getElementById('ov-gostop').classList.remove('active');
   document.getElementById('ov-wait').classList.remove('active');
 
+  if (winner === myId) playSound('win');
+
   const el = document.getElementById('gameover-results');
   el.innerHTML = '';
 
@@ -1009,6 +1121,8 @@ function renderField(cards) {
   cards.forEach(c => { (byMonth[c.month] = byMonth[c.month] || []).push(c); });
   const months = Object.keys(byMonth).map(Number).sort((a, b) => a - b);
 
+  let flipSoundScheduled = false; // 덱 뒤집기 소리는 한 번만
+
   months.forEach(month => {
     const mc = byMonth[month];
     const makeFieldCard = (c, i = 0) => {
@@ -1020,6 +1134,11 @@ function renderField(cards) {
       if (!prevFieldIds.has(c.id)) {
         cd.classList.add('deal-in');
         cd.style.animationDelay = `${i * 55}ms`;
+        // 손패→바닥(miss)은 doPlay에서 이미 소리를 냄 → 덱 카드만 flip 소리
+        if (c.id !== lastPlayedHandCardId && !flipSoundScheduled) {
+          flipSoundScheduled = true;
+          setTimeout(() => playSound('flip'), i * 55 + 40);
+        }
         cd.addEventListener('animationend', () => {
           cd.classList.remove('deal-in');
           cd.style.animationDelay = '';
@@ -1046,6 +1165,7 @@ function renderField(cards) {
   });
 
   prevFieldIds = new Set(cards.map(c => c.id));
+  lastPlayedHandCardId = null; // renderField 후 초기화
 }
 
 function renderMyHand(cards, active) {
@@ -1176,15 +1296,18 @@ function handClick(card) {
 
 function fieldClick(fid) {
   if (waitField) {
+    playSound('capture');
     waitField = false;
     const sc = selCard;
     selCard = null; pendingChoices = [];
     socket.emit('play_card', { cardId: sc.id, fieldChoiceId: fid });
   } else if (waitDeck) {
+    playSound('capture');
     waitDeck = false;
     pendingChoices = [];
     socket.emit('choose_deck_field', { fieldChoiceId: fid });
   } else if (selCard && gs?.isMyTurn) {
+    playSound('capture');
     const sc = selCard;
     selCard = null; pendingChoices = [];
     socket.emit('play_card', { cardId: sc.id, fieldChoiceId: fid });
@@ -1193,6 +1316,14 @@ function fieldClick(fid) {
 
 function doPlay(card, fid) {
   selCard = null; pendingChoices = [];
+  const hasMatch = gs?.field.some(c => c.month === card.month);
+  if (hasMatch) {
+    playSound('capture');
+    lastPlayedHandCardId = null;
+  } else {
+    playSound('miss');
+    lastPlayedHandCardId = card.id; // 손패가 바닥에 놓임 → 덱 뒤집기와 구분
+  }
   socket.emit('play_card', { cardId: card.id, fieldChoiceId: fid });
 }
 
