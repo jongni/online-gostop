@@ -1,4 +1,4 @@
-# online-gostop server v1.1
+# online-gostop server v1.2
 import random
 import os
 from flask import Flask, send_from_directory, request
@@ -125,6 +125,7 @@ def broadcast_state(room):
     if not game:
         return
     name_map = {p['id']: p['name'] for p in room['players']}
+    player_scores = room.get('player_scores', {})
     for pid in game['playerIds']:
         scores = {p: calc_score(game['captured'][p]) for p in game['playerIds']}
         socketio.emit('game_state', {
@@ -142,6 +143,7 @@ def broadcast_state(room):
             'deckSize':        len(game['deck']),
             'phase':           game['phase'],
             'lastPlay':        game['lastPlay'],
+            'playerScores':    player_scores,
         }, to=pid)
 
 
@@ -153,9 +155,37 @@ def next_turn(room):
     game['pendingHandCard'] = None
 
 
+def start_actual_game(room, first_pid=None):
+    """패를 나눠주고 게임을 시작한다. first_pid가 지정되면 그 플레이어가 선이 된다."""
+    pids = [p['id'] for p in room['players']]
+    if first_pid and first_pid in pids:
+        idx = pids.index(first_pid)
+        pids = pids[idx:] + pids[:idx]
+
+    dealt = deal_cards(pids)
+    room['state'] = 'playing'
+    room['game'] = {
+        'hands': dealt['hands'], 'field': dealt['field'], 'deck': dealt['deck'],
+        'captured':        {pid: [] for pid in pids},
+        'goCount':         {pid: 0  for pid in pids},
+        'playerIds':       pids,
+        'turnIdx':         0,
+        'phase':           'play',
+        'pendingHandCard': None,
+        'pendingDeckCard': None,
+        'lastPlay':        None,
+    }
+    name_map = {p['id']: p['name'] for p in room['players']}
+    broadcast_state(room)
+    socketio.emit('game_started', {
+        'playerScores': room.get('player_scores', {}),
+        'nameMap':      name_map,
+        'gameCount':    room.get('game_count', 0),
+    }, to=room['id'])
+
+
 def end_game(room, stopper_id=None):
     game = room['game']
-    room['state'] = 'finished'
     name_map = {p['id']: p['name'] for p in room['players']}
     results = {}
     for pid in game['playerIds']:
@@ -167,7 +197,40 @@ def end_game(room, stopper_id=None):
             'goCount': game['goCount'][pid],
         }
     winner = stopper_id or max(game['playerIds'], key=lambda p: results[p]['total'])
-    socketio.emit('game_over', {'winner': winner, 'nameMap': name_map, 'results': results}, to=room['id'])
+
+    # ── 총점 교환 ──────────────────────────────────────────────────────
+    player_scores = room.get('player_scores', {})
+    winner_total  = results[winner]['total']
+    n             = len(game['playerIds'])
+    deltas        = {pid: 0 for pid in game['playerIds']}
+
+    if winner_total > 0 and player_scores:
+        gain = winner_total * (n - 1)
+        deltas[winner] = gain
+        player_scores[winner] = player_scores.get(winner, 0) + gain
+        for pid in game['playerIds']:
+            if pid != winner:
+                deduct = min(winner_total, player_scores.get(pid, 0))
+                deltas[pid] = -deduct
+                player_scores[pid] = player_scores.get(pid, 0) - deduct
+
+    # ── 방 종료 조건 ────────────────────────────────────────────────────
+    room_over = bool(player_scores) and any(
+        player_scores.get(pid, 1) == 0 for pid in game['playerIds']
+    )
+
+    room['game_count']    = room.get('game_count', 0) + 1
+    room['first_player_id'] = winner
+    room['state']         = 'room_over' if room_over else 'between_games'
+
+    socketio.emit('game_over', {
+        'winner':       winner,
+        'nameMap':      name_map,
+        'results':      results,
+        'playerScores': player_scores,
+        'deltas':       deltas,
+        'roomOver':     room_over,
+    }, to=room['id'])
 
 
 def resolve_capture(card, field, chosen_field_id):
@@ -262,24 +325,42 @@ def on_connect():
 @socketio.on('create_room')
 def on_create_room(data):
     name = data.get('name', '')
-    room_id = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=5))
+    try:
+        initial_score = max(1, int(data.get('initialScore', 30)))
+    except Exception:
+        initial_score = 30
+
+    room_id = ''.join(random.choices('0123456789', k=4))
+    while room_id in rooms:
+        room_id = ''.join(random.choices('0123456789', k=4))
+
     rooms[room_id] = {
-        'id': room_id,
-        'players': [{'id': request.sid, 'name': name}],
-        'state': 'waiting',
-        'game': None,
+        'id':              room_id,
+        'players':         [{'id': request.sid, 'name': name}],
+        'state':           'waiting',
+        'game':            None,
+        'initial_score':   initial_score,
+        'player_scores':   {},
+        'game_count':      0,
+        'first_player_id': None,
+        'first_draw':      None,
     }
     sio_join_room(room_id)
     socket_rooms[request.sid] = room_id
     socket_names[request.sid] = name
-    emit('room_ready', {'roomId': room_id, 'players': rooms[room_id]['players'], 'isHost': True})
+    emit('room_ready', {
+        'roomId':       room_id,
+        'players':      rooms[room_id]['players'],
+        'isHost':       True,
+        'initialScore': initial_score,
+    })
 
 
 @socketio.on('join_room')
 def on_join_room(data):
-    room_id = data.get('roomId', '')
-    name = data.get('name', '')
-    room = rooms.get(room_id)
+    room_id = data.get('roomId', '').strip()
+    name    = data.get('name', '')
+    room    = rooms.get(room_id)
     if not room:
         return emit('err', '방을 찾을 수 없습니다.')
     if room['state'] != 'waiting':
@@ -293,12 +374,17 @@ def on_join_room(data):
     socket_names[request.sid] = name
 
     socketio.emit('player_joined', {'players': room['players']}, to=room_id)
-    emit('room_ready', {'roomId': room_id, 'players': room['players'], 'isHost': False})
+    emit('room_ready', {
+        'roomId':       room_id,
+        'players':      room['players'],
+        'isHost':       False,
+        'initialScore': room['initial_score'],
+    })
 
 
 @socketio.on('start_game')
 def on_start_game():
-    sid = request.sid
+    sid     = request.sid
     room_id = socket_rooms.get(sid)
     if not room_id:
         return
@@ -309,29 +395,86 @@ def on_start_game():
         return emit('err', '방장만 시작 가능합니다.')
     if len(room['players']) < 2:
         return emit('err', '2명 이상 필요합니다.')
+    if room['state'] not in ('waiting', 'between_games', 'first_draw_done'):
+        return
 
     pids = [p['id'] for p in room['players']]
-    dealt = deal_cards(pids)
-    room['state'] = 'playing'
-    room['game'] = {
-        'hands': dealt['hands'], 'field': dealt['field'], 'deck': dealt['deck'],
-        'captured':        {pid: [] for pid in pids},
-        'goCount':         {pid: 0  for pid in pids},
-        'playerIds':       pids,
-        'turnIdx':         0,
-        'phase':           'play',
-        'pendingHandCard': None,
-        'pendingDeckCard': None,
-        'lastPlay':        None,
-    }
-    broadcast_state(room)
-    socketio.emit('game_started', {}, to=room_id)
+
+    if room['game_count'] == 0 and room['state'] == 'waiting':
+        # ── 첫 게임: 점수 초기화 후 선 결정 ─────────────────────────────
+        for pid in pids:
+            room['player_scores'][pid] = room['initial_score']
+
+        draw_deck = [dict(c) for c in DECK]
+        random.shuffle(draw_deck)
+        room['state']      = 'first_draw'
+        room['first_draw'] = {'deck': draw_deck, 'picks': {}}
+
+        name_map = {p['id']: p['name'] for p in room['players']}
+        socketio.emit('first_draw_start', {
+            'cardIds':      [c['id'] for c in draw_deck],
+            'playerIds':    pids,
+            'nameMap':      name_map,
+            'playerScores': room['player_scores'],
+            'initialScore': room['initial_score'],
+        }, to=room_id)
+    else:
+        # ── 이후 게임 또는 선 결정 완료 후 ──────────────────────────────
+        start_actual_game(room, first_pid=room.get('first_player_id'))
+
+
+@socketio.on('first_draw_pick')
+def on_first_draw_pick(data):
+    sid     = request.sid
+    card_id = data.get('cardId')
+    room_id = socket_rooms.get(sid)
+    if not room_id:
+        return
+    room = rooms.get(room_id)
+    if not room or room['state'] != 'first_draw':
+        return
+
+    fd = room['first_draw']
+    if sid in fd['picks']:
+        return  # 이미 선택함
+
+    picked_ids = {c['id'] for c in fd['picks'].values()}
+    if card_id in picked_ids:
+        return  # 다른 사람이 이미 고른 카드
+
+    card = next((c for c in fd['deck'] if c['id'] == card_id), None)
+    if not card:
+        return
+
+    fd['picks'][sid] = card
+    name_map = {p['id']: p['name'] for p in room['players']}
+
+    socketio.emit('first_draw_picked', {
+        'pid':         sid,
+        'name':        name_map.get(sid, '?'),
+        'card':        card,
+        'pickedCount': len(fd['picks']),
+        'totalCount':  len(room['players']),
+    }, to=room_id)
+
+    # 모두 골랐으면 결과 발표
+    pids = [p['id'] for p in room['players']]
+    if all(pid in fd['picks'] for pid in pids):
+        first_pid = max(pids, key=lambda p: (fd['picks'][p]['month'], fd['picks'][p]['id']))
+        room['first_player_id'] = first_pid
+        room['state'] = 'first_draw_done'
+
+        socketio.emit('first_draw_result', {
+            'picks':         {pid: fd['picks'][pid] for pid in pids},
+            'firstPlayerId': first_pid,
+            'nameMap':       name_map,
+        }, to=room_id)
 
 
 @socketio.on('play_card')
 def on_play_card(data):
-    sid = request.sid
-    card_id = data.get('cardId')
+    sid           = request.sid
+    card_id       = data.get('cardId')
     field_choice_id = data.get('fieldChoiceId')
 
     room_id = socket_rooms.get(sid)
@@ -342,42 +485,42 @@ def on_play_card(data):
         return
 
     game = room['game']
-    pid = game['playerIds'][game['turnIdx']]
+    pid  = game['playerIds'][game['turnIdx']]
     if sid != pid or game['phase'] not in ('play', 'choose_field'):
         return
 
-    hand = game['hands'][pid]
+    hand     = game['hands'][pid]
     card_idx = next((i for i, c in enumerate(hand) if c['id'] == card_id), -1)
     if card_idx == -1:
         return
 
-    card = hand.pop(card_idx)
+    card   = hand.pop(card_idx)
     result = resolve_capture(card, game['field'], field_choice_id)
 
     if result is None:
         hand.insert(card_idx, card)
-        game['phase'] = 'choose_field'
+        game['phase']           = 'choose_field'
         game['pendingHandCard'] = card
         emit('choose_field_card', {
-            'card': card,
+            'card':    card,
             'choices': [c['id'] for c in game['field'] if c['month'] == card['month']],
         })
         return
 
     game['captured'][pid].extend(result['captured'])
-    game['field'] = result['field']
+    game['field']    = result['field']
     game['lastPlay'] = {
-        'handCard': card,
+        'handCard':     card,
         'handCaptured': [c['id'] for c in result['captured']],
     }
-    game['phase'] = 'deck'
+    game['phase']           = 'deck'
     game['pendingHandCard'] = None
     process_deck_card(room, pid)
 
 
 @socketio.on('choose_deck_field')
 def on_choose_deck_field(data):
-    sid = request.sid
+    sid           = request.sid
     field_choice_id = data.get('fieldChoiceId')
 
     room_id = socket_rooms.get(sid)
@@ -388,19 +531,19 @@ def on_choose_deck_field(data):
         return
 
     game = room['game']
-    pid = game['playerIds'][game['turnIdx']]
+    pid  = game['playerIds'][game['turnIdx']]
     if sid != pid or game['phase'] != 'choose_deck_field':
         return
 
     deck_card = game['pendingDeckCard']
-    result = resolve_capture(deck_card, game['field'], field_choice_id)
+    result    = resolve_capture(deck_card, game['field'], field_choice_id)
     if not result:
         return
 
     game['captured'][pid].extend(result['captured'])
     game['field'] = result['field']
     if game['lastPlay']:
-        game['lastPlay']['deckCard'] = deck_card
+        game['lastPlay']['deckCard']     = deck_card
         game['lastPlay']['deckCaptured'] = [c['id'] for c in result['captured']]
     game['pendingDeckCard'] = None
     after_deck_card(room, pid)
@@ -408,7 +551,7 @@ def on_choose_deck_field(data):
 
 @socketio.on('go_stop')
 def on_go_stop(data):
-    sid = request.sid
+    sid      = request.sid
     decision = data.get('decision')
 
     room_id = socket_rooms.get(sid)
@@ -419,7 +562,7 @@ def on_go_stop(data):
         return
 
     game = room['game']
-    pid = game['playerIds'][game['turnIdx']]
+    pid  = game['playerIds'][game['turnIdx']]
     if sid != pid or game['phase'] != 'go_stop':
         return
 
@@ -428,14 +571,17 @@ def on_go_stop(data):
     else:
         game['goCount'][pid] += 1
         name = socket_names.get(sid, '플레이어')
-        socketio.emit('chat', {'system': True, 'msg': f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'}, to=room_id)
+        socketio.emit('chat', {
+            'system': True,
+            'msg': f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'
+        }, to=room_id)
         next_turn(room)
         broadcast_state(room)
 
 
 @socketio.on('chat')
 def on_chat(data):
-    sid = request.sid
+    sid     = request.sid
     room_id = socket_rooms.get(sid)
     if not room_id:
         return
@@ -445,9 +591,9 @@ def on_chat(data):
 
 @socketio.on('disconnect')
 def on_disconnect():
-    sid = request.sid
+    sid     = request.sid
     room_id = socket_rooms.pop(sid, None)
-    name = socket_names.pop(sid, '플레이어')
+    name    = socket_names.pop(sid, '플레이어')
     if not room_id:
         return
     room = rooms.get(room_id)
@@ -460,6 +606,15 @@ def on_disconnect():
         socketio.emit('player_left', {'name': name, 'players': room['players']}, to=room_id)
         if room['state'] == 'playing':
             end_game(room)
+        elif room['state'] == 'first_draw':
+            # 선 결정 중 이탈 → 대기실로 복귀
+            room['state']        = 'waiting'
+            room['first_draw']   = None
+            room['player_scores'] = {}
+            room['game_count']   = 0
+            socketio.emit('first_draw_cancelled', {
+                'msg': f'{name}님이 나가서 선 결정이 취소되었습니다.'
+            }, to=room_id)
 
 
 if __name__ == '__main__':
