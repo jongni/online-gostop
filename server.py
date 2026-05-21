@@ -1,3 +1,4 @@
+# online-gostop server v1.1
 import random
 import os
 from flask import Flask, send_from_directory, request
