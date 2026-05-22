@@ -526,19 +526,22 @@ def after_deck_card(room, pid):
     score     = calc_score(get_effective_captured(game, pid))['score']   # 국화 선택 반영
 
     if score >= 3 and not all_empty:
-        # 직전 고 이후 추가 점수 없으면 고 불가
+        # 직전 고 이후 추가 점수가 없으면 대화 없이 자동 다음 턴
         go_score_at = game.get('go_score_at', {})
         can_go      = pid not in go_score_at or score > go_score_at[pid]
 
-        game['phase'] = 'go_stop'
-        broadcast_state(room)
-        name_map = {p['id']: p['name'] for p in room['players']}
-        socketio.emit('go_stop_prompt', {
-            'pid':   pid,
-            'name':  name_map[pid],
-            'score': score,
-            'canGo': can_go,
-        }, to=room['id'])
+        if not can_go:
+            next_turn(room)
+            broadcast_state(room)
+        else:
+            game['phase'] = 'go_stop'
+            broadcast_state(room)
+            name_map = {p['id']: p['name'] for p in room['players']}
+            socketio.emit('go_stop_prompt', {
+                'pid':   pid,
+                'name':  name_map[pid],
+                'score': score,
+            }, to=room['id'])
     elif all_empty or not game['deck']:
         end_game(room)
     else:

@@ -1001,18 +1001,11 @@ socket.on('game_state', state => {
   renderAll(state);
 });
 
-socket.on('go_stop_prompt', ({ pid, name, score, canGo }) => {
+socket.on('go_stop_prompt', ({ pid, name, score }) => {
   if (pid === myId) {
-    const canGoNow = canGo !== false;
-    document.getElementById('gostop-msg').textContent = canGoNow
-      ? `현재 점수: ${score}점 — 계속할까요?`
-      : `현재 점수: ${score}점 — 추가 점수 없음, 스톱만 가능합니다.`;
+    document.getElementById('gostop-msg').textContent = `현재 점수: ${score}점 — 계속할까요?`;
     const goBtn = document.querySelector('.btn-go');
-    if (goBtn) {
-      goBtn.disabled     = !canGoNow;
-      goBtn.style.opacity = canGoNow ? '' : '0.38';
-      goBtn.style.cursor  = canGoNow ? '' : 'not-allowed';
-    }
+    if (goBtn) { goBtn.disabled = false; goBtn.style.opacity = ''; goBtn.style.cursor = ''; }
     document.getElementById('ov-gostop').classList.add('active');
   } else {
     document.getElementById('wait-msg').textContent = `${name}이(가) 고/스톱 결정 중...`;
