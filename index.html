@@ -1001,9 +1001,18 @@ socket.on('game_state', state => {
   renderAll(state);
 });
 
-socket.on('go_stop_prompt', ({ pid, name, score }) => {
+socket.on('go_stop_prompt', ({ pid, name, score, canGo }) => {
   if (pid === myId) {
-    document.getElementById('gostop-msg').textContent = `현재 점수: ${score}점 — 계속할까요?`;
+    const canGoNow = canGo !== false;
+    document.getElementById('gostop-msg').textContent = canGoNow
+      ? `현재 점수: ${score}점 — 계속할까요?`
+      : `현재 점수: ${score}점 — 추가 점수 없음, 스톱만 가능합니다.`;
+    const goBtn = document.querySelector('.btn-go');
+    if (goBtn) {
+      goBtn.disabled     = !canGoNow;
+      goBtn.style.opacity = canGoNow ? '' : '0.38';
+      goBtn.style.cursor  = canGoNow ? '' : 'not-allowed';
+    }
     document.getElementById('ov-gostop').classList.add('active');
   } else {
     document.getElementById('wait-msg').textContent = `${name}이(가) 고/스톱 결정 중...`;
@@ -1044,7 +1053,7 @@ function chooseChrysanthemum(choice) {
 
 socket.on('chat', d => addChat(d));
 
-socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOver }) => {
+socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOver, chongtong }) => {
   document.getElementById('ov-gostop').classList.remove('active');
   document.getElementById('ov-wait').classList.remove('active');
 
@@ -1055,22 +1064,35 @@ socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOv
 
   // ── 이번 게임 결과 ────────────────────────────────────────────────
   const gt = document.createElement('div');
-  gt.className = 'gameover-title';
-  gt.textContent = '🏆 이번 게임 결과';
+  gt.className   = 'gameover-title';
+  gt.textContent = chongtong ? '🀄 총통!' : '🏆 이번 게임 결과';
   el.appendChild(gt);
+
+  if (chongtong) {
+    const sub = document.createElement('div');
+    sub.style.cssText = 'text-align:center;color:#f0c040;font-size:.84rem;margin-bottom:10px';
+    sub.textContent   = '같은 월 카드 4장 획득 — 자동 승리 (3점)';
+    el.appendChild(sub);
+  }
 
   const sorted = Object.entries(results).sort((a,b) => b[1].total - a[1].total);
   sorted.forEach(([pid, r]) => {
     const row = document.createElement('div');
     row.className = `result-row ${pid===winner?'winner':''}`;
-    const go          = goScoreLabel(r.score, r.goCount);
-    const heundeulStr = (r.heundeulMult > 1) ? ` <span style="color:#7af">×${r.heundeulMult} 흔들</span>` : '';
-    row.innerHTML = `
-      <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
-      <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'};text-align:right">
-        ${go}${heundeulStr} = <b>${r.total}점</b><br>
-        <span style="font-size:.7rem">광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}</span>
-      </span>`;
+    if (r.chongtong) {
+      row.innerHTML = `
+        <span>🀄 ${nameMap[pid]}</span>
+        <span style="color:var(--gold);font-weight:bold">총통 3점</span>`;
+    } else {
+      const go          = goScoreLabel(r.score, r.goCount);
+      const heundeulStr = (r.heundeulMult > 1) ? ` <span style="color:#7af">×${r.heundeulMult} 흔들</span>` : '';
+      row.innerHTML = `
+        <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
+        <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'};text-align:right">
+          ${go}${heundeulStr} = <b>${r.total}점</b><br>
+          <span style="font-size:.7rem">광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}</span>
+        </span>`;
+    }
     el.appendChild(row);
   });
 
@@ -1237,7 +1259,7 @@ function renderField(cards) {
 function renderMyHand(cards, active) {
   const el = document.getElementById('my-hand');
   el.innerHTML = '';
-  const heundeulMonths = new Set(gs?.heundeul?.[myId] || []);
+  const heundeulMonths = new Set(gs?.heundeulMonths || []);
   const sorted = [...cards].sort((a, b) => a.month - b.month);
   sorted.forEach(c => {
     const sel        = selCard && selCard.id === c.id;
@@ -1288,8 +1310,8 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
     const caps = cap[pid] || [];
     const chips = playerScores && playerScores[pid] !== undefined ? playerScores[pid] : null;
 
-    const heundeulMonths = gs?.heundeul?.[pid] || [];
-    const heundeulBadge  = heundeulMonths.length > 0 ? ` <span style="color:#7af;font-size:.58rem">🎋</span>` : '';
+    const heundeulBadge = (gs?.heundeulPids || []).includes(pid)
+      ? ` <span style="color:#7af;font-size:.58rem">🎋</span>` : '';
 
     const div = document.createElement('div');
     div.className = 'opponent-panel';
@@ -1335,7 +1357,7 @@ function renderMyScore(sc, chips) {
   if (!sc) return;
   const { score, breakdown, counts } = sc;
   const chipsHtml    = chips !== undefined ? `<span class="sc-chips">💰 ${chips}점</span>` : '';
-  const heundeulHtml = (gs?.heundeul?.[myId]?.length > 0)
+  const heundeulHtml = (gs?.heundeulMonths?.length > 0)
     ? `<span style="color:#7af;font-size:.72rem">🎋 흔들</span>` : '';
   document.getElementById('my-score-panel').innerHTML = `
     <span class="sc-total">📊 ${score}점</span>

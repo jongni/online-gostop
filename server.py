@@ -115,6 +115,69 @@ def check_chrysanthemum(room, pid):
         socketio.emit('choose_chrysanthemum', {}, to=pid)
 
 
+def detect_chongtong(hand):
+    """패 중 같은 월이 4장인 경우의 월 목록 반환 (총통 감지)"""
+    month_counts = {}
+    for c in hand:
+        month_counts[c['month']] = month_counts.get(c['month'], 0) + 1
+    return [m for m, cnt in month_counts.items() if cnt == 4]
+
+
+def handle_chongtong(room, winner_pid, months):
+    """총통: 같은 월 4장 획득으로 3점 자동 승리 처리"""
+    game     = room['game']
+    name_map = {p['id']: p['name'] for p in room['players']}
+    n        = len(game['playerIds'])
+
+    months_str = ', '.join(f'{m}월' for m in months)
+    msg = f'🀄 {name_map[winner_pid]} 총통! ({months_str}) — 자동 승리 3점'
+    socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+    socketio.emit('special_event', {'msg': msg},                 to=room['id'])
+
+    results = {
+        pid: {
+            'score':       3 if pid == winner_pid else 0,
+            'total':       3 if pid == winner_pid else 0,
+            'goCount':     0,
+            'breakdown':   {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
+            'counts':      {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
+            'heundeulMult': 1,
+            'chongtong':   pid == winner_pid,
+        }
+        for pid in game['playerIds']
+    }
+
+    player_scores = room.get('player_scores', {})
+    deltas        = {pid: 0 for pid in game['playerIds']}
+
+    if player_scores:
+        gain = 3 * (n - 1)
+        deltas[winner_pid] = gain
+        player_scores[winner_pid] = player_scores.get(winner_pid, 0) + gain
+        for pid in game['playerIds']:
+            if pid != winner_pid:
+                deduct = min(3, player_scores.get(pid, 0))
+                deltas[pid] = -deduct
+                player_scores[pid] = player_scores.get(pid, 0) - deduct
+
+    room_over = bool(player_scores) and any(
+        player_scores.get(pid, 1) == 0 for pid in game['playerIds']
+    )
+    room['game_count']      = room.get('game_count', 0) + 1
+    room['first_player_id'] = winner_pid
+    room['state']           = 'room_over' if room_over else 'between_games'
+
+    socketio.emit('game_over', {
+        'winner':       winner_pid,
+        'nameMap':      name_map,
+        'results':      results,
+        'playerScores': player_scores,
+        'deltas':       deltas,
+        'roomOver':     room_over,
+        'chongtong':    True,
+    }, to=room['id'])
+
+
 def calc_score(captured):
     gwang   = [c for c in captured if c['type'] == 'gwang']
     yeol    = [c for c in captured if c['type'] == 'yeolkkut']
@@ -267,7 +330,8 @@ def broadcast_state(room):
             'phase':                game['phase'],
             'lastPlay':             game['lastPlay'],
             'playerScores':         player_scores,
-            'heundeul':             game.get('heundeul', {}),
+            'heundeulMonths':        game.get('heundeul', {}).get(pid, []),
+            'heundeulPids':         list(game.get('heundeul', {}).keys()),
             'chrysanthemumChoices': game.get('chrysanthemum_choices', {}),
         }, to=pid)
 
@@ -298,6 +362,16 @@ def start_actual_game(room, first_pid=None):
         if months:
             heundeul[pid] = months
 
+    # ── 총통 감지 (같은 월 4장) ──────────────────────────────────────────
+    chongtong_winner = None
+    chongtong_months = []
+    for pid in pids:
+        ct = detect_chongtong(dealt['hands'][pid])
+        if ct:
+            chongtong_winner = pid
+            chongtong_months = ct
+            break
+
     room['state'] = 'playing'
     room['game']  = {
         'hands':                dealt['hands'],
@@ -315,14 +389,10 @@ def start_actual_game(room, first_pid=None):
         'heundeul':             heundeul,
         'chrysanthemum_choices': {},
         'heundeul_announced':   set(),
+        'go_score_at':          {},   # pid → 마지막 고를 선언한 시점의 점수
     }
 
-    # ── 흔들기 알림 ──────────────────────────────────────────────────────
-    for pid, months in heundeul.items():
-        months_str = ', '.join(f'{m}월' for m in months)
-        msg = f'🎋 {name_map[pid]} 흔들기! ({months_str})'
-        socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
-        socketio.emit('special_event', {'msg': msg},                 to=room['id'])
+    # 흔들기: 게임 시작 시 전체 공개 X — 해당 카드를 내는 시점에 공개
 
     broadcast_state(room)
     socketio.emit('game_started', {
@@ -330,6 +400,9 @@ def start_actual_game(room, first_pid=None):
         'nameMap':      name_map,
         'gameCount':    room.get('game_count', 0),
     }, to=room['id'])
+
+    if chongtong_winner:
+        handle_chongtong(room, chongtong_winner, chongtong_months)
 
 
 def end_game(room, stopper_id=None):
@@ -450,13 +523,22 @@ def after_deck_card(room, pid):
     detect_and_apply_special_events(room, pid)   # 쪽/따닥/쌓인패/쓸
     check_chrysanthemum(room, pid)               # 국화 선택 팝업
     all_empty = all(len(game['hands'][p]) == 0 for p in game['playerIds'])
-    score = calc_score(game['captured'][pid])['score']
+    score     = calc_score(get_effective_captured(game, pid))['score']   # 국화 선택 반영
 
     if score >= 3 and not all_empty:
+        # 직전 고 이후 추가 점수 없으면 고 불가
+        go_score_at = game.get('go_score_at', {})
+        can_go      = pid not in go_score_at or score > go_score_at[pid]
+
         game['phase'] = 'go_stop'
         broadcast_state(room)
         name_map = {p['id']: p['name'] for p in room['players']}
-        socketio.emit('go_stop_prompt', {'pid': pid, 'name': name_map[pid], 'score': score}, to=room['id'])
+        socketio.emit('go_stop_prompt', {
+            'pid':   pid,
+            'name':  name_map[pid],
+            'score': score,
+            'canGo': can_go,
+        }, to=room['id'])
     elif all_empty or not game['deck']:
         end_game(room)
     else:
@@ -793,8 +875,14 @@ def on_go_stop(data):
     if decision == 'stop':
         end_game(room, pid)
     else:
+        # ── 서버 사이드 canGo 검증 ────────────────────────────────────────
+        current_score = calc_score(get_effective_captured(game, pid))['score']
+        go_score_at   = game.setdefault('go_score_at', {})
+        if pid in go_score_at and current_score <= go_score_at[pid]:
+            return  # 추가 점수 없음 — 고 불가 (클라이언트 우회 방지)
+        go_score_at[pid] = current_score  # 고 선언 시점 점수 기록
         game['goCount'][pid] += 1
-        name = socket_names.get(sid, '플레이어')
+        name   = socket_names.get(sid, '플레이어')
         go_msg = f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'
         socketio.emit('chat',          {'system': True, 'msg': go_msg}, to=room_id)
         socketio.emit('special_event', {'msg': go_msg},                 to=room_id)
