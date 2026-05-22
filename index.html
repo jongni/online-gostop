@@ -428,6 +428,25 @@ body {
 }
 .btn-join-room:active { opacity: .8; }
 .room-list-empty { font-size: .78rem; color: #555; text-align: center; padding: 8px 0; }
+
+/* ── HEUNDEUL ── */
+.card.heundeul-card { box-shadow: 0 0 0 2px #7af, 0 0 10px rgba(100,160,255,.45) !important; }
+
+/* ── TOAST ── */
+#toast-container {
+  position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 6px; z-index: 300;
+  pointer-events: none; align-items: center;
+}
+.toast {
+  background: rgba(15,35,15,.96); border: 1px solid #5a9a5a;
+  border-radius: 10px; padding: 9px 20px;
+  color: #eee; font-size: .88rem; text-align: center;
+  box-shadow: 0 4px 18px rgba(0,0,0,.55); white-space: nowrap;
+  animation: toastIn 0.28s ease-out;
+}
+@keyframes toastIn  { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
+@keyframes toastOut { from { opacity:1; } to { opacity:0; transform:translateY(-6px); } }
 </style>
 </head>
 <body>
@@ -515,8 +534,8 @@ body {
     <div class="score-compact" id="my-score-panel">
       <span class="sc-total">📊 0점</span>
     </div>
-    <div class="captured-toggle" onclick="document.getElementById('my-captured').classList.toggle('open')">획득 카드 펼치기 ▾</div>
-    <div class="captured-area" id="my-captured"></div>
+    <div class="captured-toggle" id="cap-toggle" onclick="toggleCaptured()">획득 카드 접기 ▴</div>
+    <div class="captured-area open" id="my-captured"></div>
   </div>
   <div class="my-hand-section">
     <div class="hand-label">✋ 내 손패 (<span id="my-hand-count">0</span>장)</div>
@@ -557,6 +576,19 @@ body {
     <div id="fd-result-rows"></div>
     <div class="fd-result-winner-msg" id="fd-result-msg"></div>
     <div style="font-size:.78rem;color:#9ab;margin-top:4px" id="fd-result-hint"></div>
+  </div>
+</div>
+
+<!-- ══ TOAST ══ -->
+<div id="toast-container"></div>
+
+<!-- ══ 국화 선택 ══ -->
+<div class="overlay" id="ov-chrysanthemum">
+  <div class="overlay-box">
+    <div class="overlay-title">🌸 국화(9월) 열끗</div>
+    <div class="overlay-sub">이 카드를 어떻게 사용할까요?<br><span style="font-size:.78rem;color:#888">한번 선택하면 이 게임 내에서 바꿀 수 없습니다.</span></div>
+    <button class="btn btn-primary" style="margin-top:4px" onclick="chooseChrysanthemum('yeolkkut')">열끗으로 사용 <span style="font-size:.78rem;color:#ccc">(열끗 조합)</span></button>
+    <button class="btn btn-secondary" onclick="chooseChrysanthemum('pi')">쌍피로 사용 <span style="font-size:.78rem;color:#ccc">(피 2장)</span></button>
   </div>
 </div>
 
@@ -700,6 +732,28 @@ function playSound(type) {
       osc2.start(t); osc2.stop(t + 0.55);
     });
   }
+}
+
+// ── 토스트 팝업 ───────────────────────────────────────────────────────
+function showToast(msg, duration = 2400) {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className   = 'toast';
+  el.textContent = msg;
+  container.appendChild(el);
+  const fadeOut = duration - 350;
+  setTimeout(() => {
+    el.style.animation = 'toastOut 0.35s ease-in forwards';
+    setTimeout(() => el.remove(), 360);
+  }, fadeOut);
+}
+
+// ── 획득 카드 토글 ────────────────────────────────────────────────────
+function toggleCaptured() {
+  const area = document.getElementById('my-captured');
+  const btn  = document.getElementById('cap-toggle');
+  const open = area.classList.toggle('open');
+  btn.textContent = open ? '획득 카드 접기 ▴' : '획득 카드 펼치기 ▾';
 }
 
 // ── 유틸 ─────────────────────────────────────────────────────────────
@@ -977,6 +1031,17 @@ socket.on('choose_deck_field_card', ({ card, choices }) => {
   setStatus(`${card.month}월 덱카드 — 획득할 바닥 카드를 선택하세요`, true);
 });
 
+socket.on('special_event', ({ msg }) => showToast(msg));
+
+socket.on('choose_chrysanthemum', () => {
+  document.getElementById('ov-chrysanthemum').classList.add('active');
+});
+
+function chooseChrysanthemum(choice) {
+  document.getElementById('ov-chrysanthemum').classList.remove('active');
+  socket.emit('chrysanthemum_choice', { choice });
+}
+
 socket.on('chat', d => addChat(d));
 
 socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOver }) => {
@@ -998,11 +1063,12 @@ socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOv
   sorted.forEach(([pid, r]) => {
     const row = document.createElement('div');
     row.className = `result-row ${pid===winner?'winner':''}`;
-    const go = goScoreLabel(r.score, r.goCount);
+    const go          = goScoreLabel(r.score, r.goCount);
+    const heundeulStr = (r.heundeulMult > 1) ? ` <span style="color:#7af">×${r.heundeulMult} 흔들</span>` : '';
     row.innerHTML = `
       <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
       <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'};text-align:right">
-        ${go} = <b>${r.total}점</b><br>
+        ${go}${heundeulStr} = <b>${r.total}점</b><br>
         <span style="font-size:.7rem">광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}</span>
       </span>`;
     el.appendChild(row);
@@ -1171,12 +1237,15 @@ function renderField(cards) {
 function renderMyHand(cards, active) {
   const el = document.getElementById('my-hand');
   el.innerHTML = '';
-  cards.forEach(c => {
-    const sel = selCard && selCard.id === c.id;
-    const dim = !active;
+  const heundeulMonths = new Set(gs?.heundeul?.[myId] || []);
+  const sorted = [...cards].sort((a, b) => a.month - b.month);
+  sorted.forEach(c => {
+    const sel        = selCard && selCard.id === c.id;
+    const dim        = !active;
+    const isHeundeul = heundeulMonths.has(c.month);
     el.appendChild(makeCard(c, {
       onClick: active ? card => handClick(card) : null,
-      extraClass: `${sel?'selected':''} ${dim?'dim':''}`,
+      extraClass: `${sel?'selected':''} ${dim?'dim':''} ${isHeundeul?'heundeul-card':''}`,
     }));
   });
 }
@@ -1184,16 +1253,20 @@ function renderMyHand(cards, active) {
 const CAP_TYPE_ORDER  = ['gwang', 'yeolkkut', 'ribbon', 'pi'];
 const CAP_TYPE_LABELS = { gwang: '광', yeolkkut: '열끗', ribbon: '띠', pi: '피' };
 
-function groupCardsByType(cards) {
+function groupCardsByType(cards, chrysPi = false) {
   const g = { gwang: [], yeolkkut: [], ribbon: [], pi: [] };
-  cards.forEach(c => { if (g[c.type]) g[c.type].push(c); });
+  cards.forEach(c => {
+    const type = (c.id === 32 && chrysPi) ? 'pi' : c.type;
+    if (g[type]) g[type].push(c);
+  });
   return g;
 }
 
 function renderMyCaptured(cards) {
   const el = document.getElementById('my-captured');
   el.innerHTML = '';
-  const groups = groupCardsByType(cards);
+  const chrysPi = gs?.chrysanthemumChoices?.[myId] === 'pi';
+  const groups  = groupCardsByType(cards, chrysPi);
   CAP_TYPE_ORDER.forEach(type => {
     const cs = groups[type];
     if (!cs.length) return;
@@ -1215,26 +1288,30 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
     const caps = cap[pid] || [];
     const chips = playerScores && playerScores[pid] !== undefined ? playerScores[pid] : null;
 
+    const heundeulMonths = gs?.heundeul?.[pid] || [];
+    const heundeulBadge  = heundeulMonths.length > 0 ? ` <span style="color:#7af;font-size:.58rem">🎋</span>` : '';
+
     const div = document.createElement('div');
     div.className = 'opponent-panel';
     div.innerHTML = `
       <div class="opp-name">
         <span class="turn-ind ${cur?'on':''}"></span>
-        ${nm[pid]}${gc>0?` <span style="color:#f06020;font-size:.65rem">${gc}고</span>`:''}
+        ${nm[pid]}${heundeulBadge}${gc>0?` <span style="color:#f06020;font-size:.65rem">${gc}고</span>`:''}
         <span style="margin-left:auto;font-size:.62rem;color:#777">손패 ${hs[pid]||0}</span>
       </div>
       <div class="opp-captured" id="oc-${pid}"></div>
       <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>
       ${chips !== null ? `<div class="opp-chips">💰 보유: ${chips}점</div>` : ''}`;
 
-    const capEl = div.querySelector(`#oc-${pid}`);
+    const capEl  = div.querySelector(`#oc-${pid}`);
+    const chrysPi = gs?.chrysanthemumChoices?.[pid] === 'pi';
     if (caps.length === 0) {
       const emp = document.createElement('span');
       emp.style.cssText = 'font-size:.62rem;color:#555';
       emp.textContent = '획득 없음';
       capEl.appendChild(emp);
     } else {
-      const groups = groupCardsByType(caps);
+      const groups = groupCardsByType(caps, chrysPi);
       CAP_TYPE_ORDER.forEach(type => {
         const cs = groups[type];
         if (!cs.length) return;
@@ -1257,12 +1334,13 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
 function renderMyScore(sc, chips) {
   if (!sc) return;
   const { score, breakdown, counts } = sc;
-  const chipsHtml = chips !== undefined
-    ? `<span class="sc-chips">💰 ${chips}점</span>`
-    : '';
+  const chipsHtml    = chips !== undefined ? `<span class="sc-chips">💰 ${chips}점</span>` : '';
+  const heundeulHtml = (gs?.heundeul?.[myId]?.length > 0)
+    ? `<span style="color:#7af;font-size:.72rem">🎋 흔들</span>` : '';
   document.getElementById('my-score-panel').innerHTML = `
     <span class="sc-total">📊 ${score}점</span>
     ${chipsHtml}
+    ${heundeulHtml}
     <span class="sc-item">광<span>${counts.gwang}</span></span>
     <span class="sc-item">열끗<span>${counts.yeol}</span></span>
     <span class="sc-item">띠<span>${counts.ribbon}</span></span>

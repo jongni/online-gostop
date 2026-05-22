@@ -54,7 +54,7 @@ DECK = [
     {'id': 38, 'month': 10, 'type': 'pi',       'sub': None,     'name': '단피',     'double': False},
     {'id': 39, 'month': 10, 'type': 'pi',       'sub': None,     'name': '단피',     'double': False},
     {'id': 40, 'month': 11, 'type': 'gwang',    'sub': None,     'name': '오동광',   'double': False},
-    {'id': 41, 'month': 11, 'type': 'yeolkkut', 'sub': None,     'name': '오동이',   'double': False},
+    {'id': 41, 'month': 11, 'type': 'pi',       'sub': None,     'name': '오동쌍피', 'double': True},
     {'id': 42, 'month': 11, 'type': 'pi',       'sub': None,     'name': '오동피',   'double': False},
     {'id': 43, 'month': 11, 'type': 'pi',       'sub': None,     'name': '오동피',   'double': False},
     {'id': 44, 'month': 12, 'type': 'gwang',    'sub': None,     'name': '비광',     'double': False},
@@ -77,6 +77,42 @@ def deal_cards(player_ids):
     field = deck[:field_size]
     deck = deck[field_size:]
     return {'hands': hands, 'field': field, 'deck': deck}
+
+
+def detect_heundeul(hand):
+    """패 중 같은 월이 3장인 월 목록 반환 (흔들기 감지)"""
+    month_counts = {}
+    for c in hand:
+        month_counts[c['month']] = month_counts.get(c['month'], 0) + 1
+    return sorted([m for m, cnt in month_counts.items() if cnt == 3])
+
+
+def get_effective_captured(game, pid):
+    """국화(id:32) 선택에 따라 카드 타입을 조정한 획득 카드 목록"""
+    choice = game.get('chrysanthemum_choices', {}).get(pid)
+    if choice == 'pi':
+        result = []
+        for c in game['captured'][pid]:
+            if c['id'] == 32:
+                c = dict(c)
+                c['type']   = 'pi'
+                c['double'] = True
+            result.append(c)
+        return result
+    return game['captured'][pid]
+
+
+def check_chrysanthemum(room, pid):
+    """이번 턴에 국화(id:32)를 획득했으면 선택 팝업 요청"""
+    game    = room['game']
+    choices = game.setdefault('chrysanthemum_choices', {})
+    if pid in choices:
+        return
+    last     = game.get('lastPlay') or {}
+    hand_cap = last.get('handCaptured', [])
+    deck_cap = last.get('deckCaptured', [])
+    if 32 in hand_cap or 32 in deck_cap:
+        socketio.emit('choose_chrysanthemum', {}, to=pid)
 
 
 def calc_score(captured):
@@ -203,33 +239,36 @@ def detect_and_apply_special_events(room, pid):
         msg   = (f'✨ {name_map[pid]} {label}! — 상대 피 {n}장을 뺏었습니다!'
                  if n > 0 else
                  f'✨ {name_map[pid]} {label}! (뺏을 피 없음)')
-        socketio.emit('chat', {'system': True, 'msg': msg}, to=room['id'])
+        socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+        socketio.emit('special_event', {'msg': msg},                 to=room['id'])
 
 
 def broadcast_state(room):
     game = room.get('game')
     if not game:
         return
-    name_map = {p['id']: p['name'] for p in room['players']}
+    name_map      = {p['id']: p['name'] for p in room['players']}
     player_scores = room.get('player_scores', {})
+    scores        = {p: calc_score(get_effective_captured(game, p)) for p in game['playerIds']}
     for pid in game['playerIds']:
-        scores = {p: calc_score(game['captured'][p]) for p in game['playerIds']}
         socketio.emit('game_state', {
-            'myId':            pid,
-            'myHand':          game['hands'][pid],
-            'field':           game['field'],
-            'captured':        game['captured'],
-            'handSizes':       {p: len(game['hands'][p]) for p in game['playerIds']},
-            'currentPlayerId': game['playerIds'][game['turnIdx']],
-            'isMyTurn':        pid == game['playerIds'][game['turnIdx']],
-            'playerIds':       game['playerIds'],
-            'nameMap':         name_map,
-            'scores':          scores,
-            'goCount':         game['goCount'],
-            'deckSize':        len(game['deck']),
-            'phase':           game['phase'],
-            'lastPlay':        game['lastPlay'],
-            'playerScores':    player_scores,
+            'myId':                 pid,
+            'myHand':               sorted(game['hands'][pid], key=lambda c: c['month']),
+            'field':                game['field'],
+            'captured':             game['captured'],
+            'handSizes':            {p: len(game['hands'][p]) for p in game['playerIds']},
+            'currentPlayerId':      game['playerIds'][game['turnIdx']],
+            'isMyTurn':             pid == game['playerIds'][game['turnIdx']],
+            'playerIds':            game['playerIds'],
+            'nameMap':              name_map,
+            'scores':               scores,
+            'goCount':              game['goCount'],
+            'deckSize':             len(game['deck']),
+            'phase':                game['phase'],
+            'lastPlay':             game['lastPlay'],
+            'playerScores':         player_scores,
+            'heundeul':             game.get('heundeul', {}),
+            'chrysanthemumChoices': game.get('chrysanthemum_choices', {}),
         }, to=pid)
 
 
@@ -249,10 +288,21 @@ def start_actual_game(room, first_pid=None):
         idx = pids.index(first_pid)
         pids = pids[idx:] + pids[:idx]
 
-    dealt = deal_cards(pids)
+    dealt    = deal_cards(pids)
+    name_map = {p['id']: p['name'] for p in room['players']}
+
+    # ── 흔들기 감지 ──────────────────────────────────────────────────────
+    heundeul = {}
+    for pid in pids:
+        months = detect_heundeul(dealt['hands'][pid])
+        if months:
+            heundeul[pid] = months
+
     room['state'] = 'playing'
-    room['game'] = {
-        'hands': dealt['hands'], 'field': dealt['field'], 'deck': dealt['deck'],
+    room['game']  = {
+        'hands':                dealt['hands'],
+        'field':                dealt['field'],
+        'deck':                 dealt['deck'],
         'captured':             {pid: [] for pid in pids},
         'goCount':              {pid: 0  for pid in pids},
         'playerIds':            pids,
@@ -262,8 +312,18 @@ def start_actual_game(room, first_pid=None):
         'pendingDeckCard':      None,
         'lastPlay':             None,
         'fieldSizeAtTurnStart': len(dealt['field']),
+        'heundeul':             heundeul,
+        'chrysanthemum_choices': {},
+        'heundeul_announced':   set(),
     }
-    name_map = {p['id']: p['name'] for p in room['players']}
+
+    # ── 흔들기 알림 ──────────────────────────────────────────────────────
+    for pid, months in heundeul.items():
+        months_str = ', '.join(f'{m}월' for m in months)
+        msg = f'🎋 {name_map[pid]} 흔들기! ({months_str})'
+        socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+        socketio.emit('special_event', {'msg': msg},                 to=room['id'])
+
     broadcast_state(room)
     socketio.emit('game_started', {
         'playerScores': room.get('player_scores', {}),
@@ -277,16 +337,24 @@ def end_game(room, stopper_id=None):
     name_map = {p['id']: p['name'] for p in room['players']}
     results = {}
     for pid in game['playerIds']:
-        s  = calc_score(game['captured'][pid])
+        s  = calc_score(get_effective_captured(game, pid))
         go = game['goCount'][pid]
         results[pid] = {
-            'score':     s['score'],
-            'total':     apply_go_bonus(s['score'], go),
-            'goCount':   go,
-            'breakdown': s['breakdown'],
-            'counts':    s['counts'],
+            'score':       s['score'],
+            'total':       apply_go_bonus(s['score'], go),
+            'goCount':     go,
+            'breakdown':   s['breakdown'],
+            'counts':      s['counts'],
+            'heundeulMult': 1,
         }
     winner = stopper_id or max(game['playerIds'], key=lambda p: results[p]['total'])
+
+    # ── 흔들기 배수 (승자에게만 적용) ────────────────────────────────────
+    heundeul_months = game.get('heundeul', {}).get(winner, [])
+    if heundeul_months:
+        mult = 2 ** len(heundeul_months)
+        results[winner]['total']       *= mult
+        results[winner]['heundeulMult'] = mult
 
     # ── 총점 교환 ──────────────────────────────────────────────────────
     player_scores = room.get('player_scores', {})
@@ -380,6 +448,7 @@ def process_deck_card(room, pid):
 def after_deck_card(room, pid):
     game = room['game']
     detect_and_apply_special_events(room, pid)   # 쪽/따닥/쌓인패/쓸
+    check_chrysanthemum(room, pid)               # 국화 선택 팝업
     all_empty = all(len(game['hands'][p]) == 0 for p in game['playerIds'])
     score = calc_score(game['captured'][pid])['score']
 
@@ -606,7 +675,20 @@ def on_play_card(data):
     if card_idx == -1:
         return
 
-    card   = hand.pop(card_idx)
+    card = hand.pop(card_idx)
+
+    # ── 흔들기 카드 첫 사용 알림 ────────────────────────────────────────
+    h_dict = game.get('heundeul', {})
+    h_ann  = game.setdefault('heundeul_announced', set())
+    if pid in h_dict and card['month'] in h_dict[pid]:
+        key = (pid, card['month'])
+        if key not in h_ann:
+            h_ann.add(key)
+            nm_h  = {p['id']: p['name'] for p in room['players']}
+            msg_h = f'🎋 {nm_h[pid]} 흔들기! ({card["month"]}월)'
+            socketio.emit('chat',          {'system': True, 'msg': msg_h}, to=room_id)
+            socketio.emit('special_event', {'msg': msg_h},                 to=room_id)
+
     result = resolve_capture(card, game['field'], field_choice_id)
 
     if result is None:
@@ -662,6 +744,35 @@ def on_choose_deck_field(data):
     after_deck_card(room, pid)
 
 
+@socketio.on('chrysanthemum_choice')
+def on_chrysanthemum_choice(data):
+    sid    = request.sid
+    choice = data.get('choice')
+    if choice not in ('yeolkkut', 'pi'):
+        return
+    room_id = socket_rooms.get(sid)
+    if not room_id:
+        return
+    room = rooms.get(room_id)
+    if not room or room['state'] != 'playing':
+        return
+    game = room['game']
+    if sid not in game['playerIds']:
+        return
+    choices = game.setdefault('chrysanthemum_choices', {})
+    if sid in choices:
+        return  # 이미 선택함 — 변경 불가
+    if not any(c['id'] == 32 for c in game['captured'][sid]):
+        return
+    choices[sid] = choice
+    label    = '열끗' if choice == 'yeolkkut' else '쌍피(피 2장)'
+    name_map = {p['id']: p['name'] for p in room['players']}
+    msg      = f'🌸 {name_map.get(sid, "?")}이(가) 국화를 {label}로 선택했습니다.'
+    socketio.emit('chat',          {'system': True, 'msg': msg}, to=room_id)
+    socketio.emit('special_event', {'msg': msg},                 to=room_id)
+    broadcast_state(room)
+
+
 @socketio.on('go_stop')
 def on_go_stop(data):
     sid      = request.sid
@@ -684,10 +795,9 @@ def on_go_stop(data):
     else:
         game['goCount'][pid] += 1
         name = socket_names.get(sid, '플레이어')
-        socketio.emit('chat', {
-            'system': True,
-            'msg': f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'
-        }, to=room_id)
+        go_msg = f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'
+        socketio.emit('chat',          {'system': True, 'msg': go_msg}, to=room_id)
+        socketio.emit('special_event', {'msg': go_msg},                 to=room_id)
         next_turn(room)
         broadcast_state(room)
 
