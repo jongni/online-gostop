@@ -448,6 +448,42 @@ body {
 @keyframes toastIn  { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
 @keyframes toastOut { from { opacity:1; } to { opacity:0; transform:translateY(-6px); } }
 
+/* ── LAST PLAY ANIMATION ── */
+#lpa-overlay {
+  position: fixed;
+  top: 42%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 80;
+  pointer-events: none;
+  background: rgba(4,14,4,.93);
+  border: 1px solid rgba(74,138,74,.65);
+  border-radius: 12px;
+  padding: 9px 16px;
+  text-align: center;
+  transition: opacity 0.2s ease;
+  min-width: 90px;
+}
+.lpa-label { font-size: .63rem; color: #8ab; margin-bottom: 5px; letter-spacing: .02em; }
+.lpa-phase { display: flex; align-items: center; gap: 5px; justify-content: center; flex-wrap: wrap; }
+.lpa-card  {
+  width: 42px; height: 62px; flex-shrink: 0;
+  background-size: 100% 100%; background-color: #fff;
+  border-radius: 4px; border: 1px solid rgba(255,255,255,.2);
+}
+.lpa-card.lpa-hi {
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 10px rgba(240,192,64,.55);
+}
+.lpa-plus { color: var(--gold); font-size: 1.1rem; font-weight: bold; line-height: 1; }
+
+/* 바닥에 그냥 놓인 패 글로우 */
+@keyframes missGlow {
+  0%   { box-shadow: 0 0 0 3px var(--gold), 0 0 14px rgba(240,192,64,.7); }
+  80%  { box-shadow: 0 0 0 2px rgba(240,192,64,.3), 0 0 5px rgba(240,192,64,.15); }
+  100% { box-shadow: none; }
+}
+.card.miss-glow { animation: missGlow 2.8s ease-out forwards; }
+
 /* ── RESULT CAPTURED CARDS ── */
 .result-cap-player {
   border-top: 1px solid rgba(255,255,255,.08);
@@ -633,6 +669,9 @@ body {
   </div>
 </div>
 
+<!-- ══ LAST PLAY ANIMATION ══ -->
+<div id="lpa-overlay" style="display:none;opacity:0"><div id="lpa-content"></div></div>
+
 <script>
 // ── 전역 상태 ────────────────────────────────────────────────────────
 const socket = io();
@@ -646,6 +685,10 @@ let prevFieldIds = new Set();
 let isHost     = false;
 let fdMyPicked = false;  // 선 결정에서 내가 골랐는지
 let lastPlayedHandCardId = null; // 손패→바닥 카드 ID (덱 뒤집기와 구분)
+let lastAnimLpId = null;         // 마지막으로 애니메이션한 lastPlay handCard id
+let missGlowIds  = new Set();    // 바닥에 낸 패(미스) 글로우 카드 ID 집합
+let _lpaT1 = null, _lpaT2 = null;
+let skipNextAnim = false;        // 내가 직접 낸 패는 애니메이션 스킵
 
 // ── 효과음 (Web Audio API) ────────────────────────────────────────────
 const _ACtx = window.AudioContext || window.webkitAudioContext;
@@ -768,6 +811,70 @@ function showToast(msg, duration = 2400) {
     el.style.animation = 'toastOut 0.35s ease-in forwards';
     setTimeout(() => el.remove(), 360);
   }, fadeOut);
+}
+
+// ── 낸 패 애니메이션 ──────────────────────────────────────────────────
+function showLastPlayAnim(lp, nameMap, playerId) {
+  if (!lp || !lp.handCard) return;
+  const overlay = document.getElementById('lpa-overlay');
+  const content = document.getElementById('lpa-content');
+  if (!overlay || !content) return;
+
+  if (_lpaT1) { clearTimeout(_lpaT1); _lpaT1 = null; }
+  if (_lpaT2) { clearTimeout(_lpaT2); _lpaT2 = null; }
+
+  const name = (nameMap && playerId && nameMap[playerId]) ? nameMap[playerId] : '상대';
+
+  function cardDiv(id, hi) {
+    return `<div class="lpa-card${hi ? ' lpa-hi' : ''}" style="background-image:url('img/cards/${id}.png')"></div>`;
+  }
+
+  function buildPhaseHTML(label, cardEntries) {
+    let h = `<div class="lpa-label">${label}</div><div class="lpa-phase">`;
+    cardEntries.forEach((e, i) => {
+      if (i > 0) h += '<div class="lpa-plus">+</div>';
+      h += cardDiv(e.id, e.hi);
+    });
+    h += '</div>';
+    return h;
+  }
+
+  // Phase 1: hand card
+  const handMiss = Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0;
+  const p1cards  = [{ id: lp.handCard.id, hi: true }];
+  if (!handMiss && Array.isArray(lp.handCaptured)) {
+    lp.handCaptured.forEach(id => {
+      if (id !== lp.handCard.id) p1cards.push({ id, hi: false });
+    });
+  }
+
+  content.innerHTML = buildPhaseHTML(`${name}의 패`, p1cards);
+  overlay.style.display = 'block';
+  requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+  // Phase 2: deck card (1.8s later)
+  _lpaT1 = setTimeout(() => {
+    _lpaT1 = null;
+    if (!lp.deckCard || !Array.isArray(lp.deckCaptured)) {
+      overlay.style.opacity = '0';
+      _lpaT2 = setTimeout(() => { overlay.style.display = 'none'; _lpaT2 = null; }, 220);
+      return;
+    }
+    const deckMiss = lp.deckCaptured.length === 0;
+    const p2cards  = [{ id: lp.deckCard.id, hi: true }];
+    if (!deckMiss) {
+      lp.deckCaptured.forEach(id => {
+        if (id !== lp.deckCard.id) p2cards.push({ id, hi: false });
+      });
+    }
+    content.innerHTML = buildPhaseHTML(deckMiss ? '덱 → 바닥' : '덱 카드', p2cards);
+
+    _lpaT2 = setTimeout(() => {
+      _lpaT2 = null;
+      overlay.style.opacity = '0';
+      setTimeout(() => { overlay.style.display = 'none'; }, 220);
+    }, 1600);
+  }, 1800);
 }
 
 // ── 획득 카드 토글 ────────────────────────────────────────────────────
@@ -1014,10 +1121,44 @@ socket.on('first_draw_cancelled', d => {
 socket.on('game_started', d => {
   document.getElementById('ov-firstdraw-result').classList.remove('active');
   document.getElementById('chat-fab').classList.add('visible');
+  // 게임 전환 시 애니메이션 상태 초기화
+  lastAnimLpId = null;
+  skipNextAnim = false;
+  missGlowIds.clear();
+  if (_lpaT1) { clearTimeout(_lpaT1); _lpaT1 = null; }
+  if (_lpaT2) { clearTimeout(_lpaT2); _lpaT2 = null; }
+  const ov = document.getElementById('lpa-overlay');
+  if (ov) { ov.style.opacity = '0'; ov.style.display = 'none'; }
   show('s-game');
 });
 
 socket.on('game_state', state => {
+  const lp = state.lastPlay;
+
+  // ── 낸 패 애니메이션 ─────────────────────────────────────────────
+  // deckCaptured가 배열일 때만 완성된 턴 → 애니메이션 발동
+  if (lp && lp.handCard && Array.isArray(lp.deckCaptured) && lp.handCard.id !== lastAnimLpId) {
+    lastAnimLpId = lp.handCard.id;
+    if (skipNextAnim) {
+      // 내 플레이 — 오버레이 대신 miss-glow만 처리
+      if (Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0) {
+        missGlowIds.add(lp.handCard.id);
+      }
+      skipNextAnim = false;
+    } else {
+      // 상대 플레이 — 풀 애니메이션
+      if (Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0) {
+        missGlowIds.add(lp.handCard.id);
+      }
+      const prevPlayerId = gs?.currentPlayerId; // 이전 상태의 currentPlayer = 방금 낸 사람
+      showLastPlayAnim(lp, state.nameMap, prevPlayerId);
+    }
+  } else if (skipNextAnim && lp && lp.handCard && !Array.isArray(lp.deckCaptured)) {
+    // 중간 단계(덱 카드 대기) — 스킵 플래그 유지
+  } else {
+    skipNextAnim = false;
+  }
+
   gs = state;
   myId = state.myId;
   renderAll(state);
@@ -1389,7 +1530,22 @@ function renderField(cards) {
         cd.addEventListener('animationend', () => {
           cd.classList.remove('deal-in');
           cd.style.animationDelay = '';
+          // deal-in 끝난 뒤 miss-glow 적용 (새로 바닥에 놓인 패)
+          if (missGlowIds.has(c.id)) {
+            missGlowIds.delete(c.id);
+            cd.classList.add('miss-glow');
+            cd.addEventListener('animationend', () => cd.classList.remove('miss-glow'), { once: true });
+          }
         }, { once: true });
+      } else if (missGlowIds.has(c.id)) {
+        // 이미 바닥에 있던 카드가 glow 대상이면 바로 적용
+        missGlowIds.delete(c.id);
+        requestAnimationFrame(() => {
+          cd.classList.remove('miss-glow');
+          void cd.offsetWidth; // reflow
+          cd.classList.add('miss-glow');
+          cd.addEventListener('animationend', () => cd.classList.remove('miss-glow'), { once: true });
+        });
       }
       return cd;
     };
@@ -1564,6 +1720,7 @@ function handClick(card) {
 function fieldClick(fid) {
   if (waitField) {
     playSound('capture');
+    skipNextAnim = true;
     waitField = false;
     const sc = selCard;
     selCard = null; pendingChoices = [];
@@ -1575,6 +1732,7 @@ function fieldClick(fid) {
     socket.emit('choose_deck_field', { fieldChoiceId: fid });
   } else if (selCard && gs?.isMyTurn) {
     playSound('capture');
+    skipNextAnim = true;
     const sc = selCard;
     selCard = null; pendingChoices = [];
     socket.emit('play_card', { cardId: sc.id, fieldChoiceId: fid });
@@ -1583,6 +1741,7 @@ function fieldClick(fid) {
 
 function doPlay(card, fid) {
   selCard = null; pendingChoices = [];
+  skipNextAnim = true; // 내가 직접 낸 패는 애니메이션 스킵
   const hasMatch = gs?.field.some(c => c.month === card.month);
   if (hasMatch) {
     playSound('capture');
