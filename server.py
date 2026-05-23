@@ -120,31 +120,34 @@ def detect_chongtong(hand):
     return [m for m, cnt in month_counts.items() if cnt == 4]
 
 
-def handle_chongtong(room, winner_pid, months):
-    """총통: 같은 월 4장 획득으로 3점 자동 승리 처리"""
+def handle_chongtong(room, winner_pid, months, field=False):
+    """총통: 손패 또는 바닥에 같은 월 4장 → 선(또는 해당 플레이어) 자동 승리"""
     game     = room['game']
     name_map = {p['id']: p['name'] for p in room['players']}
     n        = len(game['playerIds'])
 
+    points     = 7 if n == 2 else 3          # 2인 7점, 3인+ 3점
     months_str = ', '.join(f'{m}월' for m in months)
-    msg = f'🀄 {name_map[winner_pid]} 총통! ({months_str}) — 자동 승리 3점'
+    kind       = '바닥 총통' if field else '총통'
+    msg = f'🀄 {kind}! ({months_str}) — {name_map[winner_pid]} 자동 승리 {points}점'
     socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
     socketio.emit('special_event', {'msg': msg},                 to=room['id'])
 
     # 파토 배율 적용
     pato_mult    = room.pop('pato_mult', 1)
-    winner_total = 3 * pato_mult
+    winner_total = points * pato_mult
 
     results = {
         pid: {
-            'score':       3 if pid == winner_pid else 0,
-            'total':       winner_total if pid == winner_pid else 0,
-            'goCount':     0,
-            'breakdown':   {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0, 'godori': 0},
-            'counts':      {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
-            'heundeulMult': 1,
-            'patoMult':    pato_mult if pid == winner_pid else 1,
-            'chongtong':   pid == winner_pid,
+            'score':         points if pid == winner_pid else 0,
+            'total':         winner_total if pid == winner_pid else 0,
+            'goCount':       0,
+            'breakdown':     {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0, 'godori': 0, 'ribbonSubs': []},
+            'counts':        {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
+            'heundeulMult':  1,
+            'patoMult':      pato_mult if pid == winner_pid else 1,
+            'chongtong':     pid == winner_pid,
+            'capturedCards': [],
         }
         for pid in game['playerIds']
     }
@@ -381,15 +384,24 @@ def start_actual_game(room, first_pid=None):
         if months:
             heundeul[pid] = months
 
-    # ── 총통 감지 (같은 월 4장) ──────────────────────────────────────────
+    # ── 손패 총통 감지 (같은 월 4장) ────────────────────────────────────
     chongtong_winner = None
     chongtong_months = []
+    chongtong_field  = False
     for pid in pids:
         ct = detect_chongtong(dealt['hands'][pid])
         if ct:
             chongtong_winner = pid
             chongtong_months = ct
             break
+
+    # ── 바닥 총통 감지 (손패 총통 없을 때, 바닥에 같은 월 4장 → 선 승리)
+    if not chongtong_winner:
+        field_ct = detect_chongtong(dealt['field'])
+        if field_ct:
+            chongtong_winner = pids[0]   # 선(先) 플레이어가 승리
+            chongtong_months = field_ct
+            chongtong_field  = True
 
     room['state'] = 'playing'
     room['game']  = {
@@ -422,7 +434,7 @@ def start_actual_game(room, first_pid=None):
     }, to=room['id'])
 
     if chongtong_winner:
-        handle_chongtong(room, chongtong_winner, chongtong_months)
+        handle_chongtong(room, chongtong_winner, chongtong_months, field=chongtong_field)
 
 
 def end_game(room, stopper_id=None):
