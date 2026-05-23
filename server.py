@@ -305,10 +305,12 @@ def detect_and_apply_special_events(room, pid):
         events.append('ssain')
 
     # ── 규칙5: 쓸 ─ 바닥이 정확히 2장이었는데 낸 패+덱으로 싹 비운 경우 ─
+    # 마지막 패(손패 소진)로 쓸이 되는 경우는 제외 (상대 피를 빼앗지 않음)
     if (field_before == 2 and
         len(game['field']) == 0 and
         len(hand_cap) >= 2 and
         len(deck_cap) >= 2 and
+        len(game['hands'][pid]) > 0 and
         'jjok' not in events):
         events.append('sseul')
 
