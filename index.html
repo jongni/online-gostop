@@ -167,15 +167,14 @@ body {
 
 /* Opponents */
 .opponents-row {
-  display: flex; gap: 6px; padding: 6px 8px;
-  overflow-x: auto; flex-shrink: 0;
-  scrollbar-width: none;
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 5px 6px;
+  flex-shrink: 0;
   background: rgba(0,0,0,.25); border-bottom: 1px solid #1a4a1a;
 }
-.opponents-row::-webkit-scrollbar { display: none; }
 .opponent-panel {
   background: rgba(0,0,0,.35); border: 1px solid #2a6a2a;
-  border-radius: 8px; padding: 6px 8px; flex-shrink: 0; min-width: 110px; max-width: 160px;
+  border-radius: 8px; padding: 5px 7px;
+  flex: 1; min-width: 46%;   /* 2-per-row for 3/4-player, full-width for 2-player */
 }
 .opp-name { font-weight: bold; font-size: .76rem; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; }
 .turn-ind { width: 7px; height: 7px; background: var(--gold); border-radius: 50%; animation: pulse 1s infinite; display: none; flex-shrink: 0; }
@@ -194,12 +193,13 @@ body {
   height: calc(var(--card-h) + 14px);
 }
 .opp-captured {
-  display: flex; gap: 2px; overflow-x: auto; margin-top: 3px;
-  scrollbar-width: none; min-height: 32px; align-items: center;
+  display: flex; flex-direction: column; gap: 2px; margin-top: 3px;
 }
-.opp-captured::-webkit-scrollbar { display: none; }
+.opp-type-row {
+  display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+}
 .opp-cap-card {
-  width: 20px; height: 30px; flex-shrink: 0;
+  width: 26px; height: 38px; flex-shrink: 0;
   background-size: 100% 100%; background-color: #fff;
   border-radius: 2px; border: 1px solid rgba(255,255,255,.25);
 }
@@ -248,8 +248,8 @@ body {
 }
 .cap-type-label:first-child { margin-left: 0; }
 .opp-cap-label {
-  font-size: .5rem; color: #8bc; align-self: center;
-  padding: 0 2px; white-space: nowrap; flex-shrink: 0;
+  font-size: .52rem; color: #8bc; white-space: nowrap;
+  flex-shrink: 0; min-width: 14px; align-self: center; text-align: right;
 }
 
 /* My hand */
@@ -447,6 +447,28 @@ body {
 }
 @keyframes toastIn  { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
 @keyframes toastOut { from { opacity:1; } to { opacity:0; transform:translateY(-6px); } }
+
+/* ── RESULT CAPTURED CARDS ── */
+.result-cap-player {
+  border-top: 1px solid rgba(255,255,255,.08);
+  padding: 7px 0 5px;
+}
+.result-cap-name  { font-size: .76rem; font-weight: bold; color: #ddd; margin-bottom: 4px; }
+.result-cap-name.is-winner { color: var(--gold); }
+.result-cap-row   { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; margin-bottom: 3px; }
+.result-cap-label { font-size: .52rem; color: #8bc; min-width: 18px; flex-shrink: 0; text-align: right; }
+.result-cap-card  {
+  width: 26px; height: 38px; flex-shrink: 0;
+  background-size: 100% 100%; background-color: #fff;
+  border-radius: 2px; border: 1px solid rgba(255,255,255,.25);
+  position: relative;
+}
+.result-cap-badge {
+  position: absolute; top: 1px; right: 1px;
+  background: #f03; color: #fff; font-size: .38rem;
+  padding: 1px 2px; border-radius: 2px; font-weight: bold; line-height: 1;
+}
+.result-breakdown { font-size: .68rem; color: #9ab; margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -999,6 +1021,11 @@ socket.on('game_state', state => {
   gs = state;
   myId = state.myId;
   renderAll(state);
+  // 국화(id:32) 보유 중인데 아직 선택 안 했으면 팝업 표시 (안전장치)
+  const hasChrys = (state.captured?.[myId] || []).some(c => c.id === 32);
+  if (hasChrys && !state.chrysanthemumChoices?.[myId]) {
+    document.getElementById('ov-chrysanthemum').classList.add('active');
+  }
 });
 
 socket.on('go_stop_prompt', ({ pid, name, score }) => {
@@ -1046,14 +1073,62 @@ function chooseChrysanthemum(choice) {
 
 socket.on('chat', d => addChat(d));
 
-socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOver, chongtong }) => {
+socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOver, chongtong, pato, patoMult, dokbakPid }) => {
   document.getElementById('ov-gostop').classList.remove('active');
   document.getElementById('ov-wait').classList.remove('active');
 
-  if (winner === myId) playSound('win');
+  if (!pato && winner === myId) playSound('win');
 
   const el = document.getElementById('gameover-results');
   el.innerHTML = '';
+
+  // ── 파토 처리 ────────────────────────────────────────────────────
+  if (pato) {
+    const gt = document.createElement('div');
+    gt.className = 'gameover-title';
+    gt.textContent = '🔄 파토!';
+    el.appendChild(gt);
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'text-align:center;color:#f0a040;font-size:.88rem;margin-bottom:12px';
+    sub.textContent = `아무도 나지 못했습니다. 다음 게임은 ${patoMult}배 게임입니다.`;
+    el.appendChild(sub);
+
+    if (playerScores && Object.keys(playerScores).length > 0) {
+      const st = document.createElement('div');
+      st.className = 'gameover-section-title';
+      st.textContent = '💰 보유 점수 현황 (변동 없음)';
+      el.appendChild(st);
+      Object.entries(playerScores).sort((a,b)=>b[1]-a[1]).forEach(([pid, score]) => {
+        const row = document.createElement('div');
+        row.className = `chips-row${score===0?' eliminated':''}`;
+        row.innerHTML = `<span>${nameMap[pid]||pid}</span><span style="color:var(--gold)"><b>${score}점</b></span>`;
+        el.appendChild(row);
+      });
+    }
+
+    const btnArea = document.createElement('div');
+    btnArea.style.cssText = 'margin-top:16px;display:flex;flex-direction:column;gap:8px';
+    if (isHost) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-primary';
+      btn.textContent = `다음 게임 (${patoMult}배) ▶`;
+      btn.onclick = () => { btn.disabled = true; btn.textContent = '시작 중...'; socket.emit('start_game'); };
+      btnArea.appendChild(btn);
+    } else {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'text-align:center;color:#aaa;font-size:.85rem';
+      msg.textContent = '방장이 다음 게임을 시작할 때까지 기다려주세요.';
+      btnArea.appendChild(msg);
+    }
+    const quit = document.createElement('button');
+    quit.className = 'btn'; quit.style.background = '#333';
+    quit.textContent = '방 나가기'; quit.onclick = () => location.reload();
+    btnArea.appendChild(quit);
+    el.appendChild(btnArea);
+    show('s-gameover');
+    return;
+  }
 
   // ── 이번 게임 결과 ────────────────────────────────────────────────
   const gt = document.createElement('div');
@@ -1068,26 +1143,117 @@ socket.on('game_over', ({ winner, nameMap, results, playerScores, deltas, roomOv
     el.appendChild(sub);
   }
 
+  if (patoMult > 1) {
+    const sub = document.createElement('div');
+    sub.style.cssText = 'text-align:center;color:#f0a040;font-size:.8rem;margin-bottom:8px';
+    sub.textContent = `🔄 파토 누적 ${patoMult}배 적용`;
+    el.appendChild(sub);
+  }
+
   const sorted = Object.entries(results).sort((a,b) => b[1].total - a[1].total);
   sorted.forEach(([pid, r]) => {
     const row = document.createElement('div');
     row.className = `result-row ${pid===winner?'winner':''}`;
     if (r.chongtong) {
+      const patoStr = (r.patoMult > 1) ? ` ×${r.patoMult}파토` : '';
       row.innerHTML = `
         <span>🀄 ${nameMap[pid]}</span>
-        <span style="color:var(--gold);font-weight:bold">총통 3점</span>`;
+        <span style="color:var(--gold);font-weight:bold">총통 ${r.total}점${patoStr}</span>`;
     } else {
       const go          = goScoreLabel(r.score, r.goCount);
-      const heundeulStr = (r.heundeulMult > 1) ? ` <span style="color:#7af">×${r.heundeulMult} 흔들</span>` : '';
+      const heundeulStr = (r.heundeulMult > 1)    ? ` <span style="color:#7af">×${r.heundeulMult} 흔들</span>` : '';
+      const patoStr     = (r.patoMult > 1)         ? ` <span style="color:#f0a040">×${r.patoMult} 파토</span>` : '';
+      // 패자 박 표시: 박이 있으면 차감액 뒤에 표기
+      const bakStr      = (r.bakTypes?.length > 0) ? ` <span style="color:#f05050">💥${r.bakTypes.join('+')} ×${r.bakMult}</span>` : '';
+      // 독박 표시
+      const isDokbak    = (pid === dokbakPid && pid !== winner);
+      const dokbakStr   = isDokbak ? ` <span style="color:#f03030;font-size:.72rem">🔴독박</span>` : '';
       row.innerHTML = `
-        <span>${pid===winner?'🏆 ':''}${nameMap[pid]}</span>
+        <span>${pid===winner?'🏆 ':''}${nameMap[pid]}${dokbakStr}</span>
         <span style="font-size:.82rem;color:${pid===winner?'var(--gold)':'#bbb'};text-align:right">
-          ${go}${heundeulStr} = <b>${r.total}점</b><br>
+          ${go}${heundeulStr}${patoStr} = <b>${r.total}점</b>${bakStr}<br>
           <span style="font-size:.7rem">광${r.counts.gwang} 열끗${r.counts.yeol} 띠${r.counts.ribbon} 피${r.counts.pi}</span>
         </span>`;
     }
     el.appendChild(row);
   });
+
+  // ── 획득 카드 상세 ────────────────────────────────────────────────
+  const hasCapData = sorted.some(([, r]) => r.capturedCards?.length > 0);
+  if (hasCapData) {
+    const capTitle = document.createElement('div');
+    capTitle.className = 'gameover-section-title';
+    capTitle.textContent = '🃏 획득 카드 상세';
+    el.appendChild(capTitle);
+
+    // 승자 먼저 표시
+    const capSorted = [...sorted].sort(([a],[b]) => (a===winner?-1 : b===winner?1 : 0));
+    capSorted.forEach(([pid, r]) => {
+      const caps = r.capturedCards || [];
+      const playerDiv = document.createElement('div');
+      playerDiv.className = 'result-cap-player';
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = `result-cap-name${pid===winner?' is-winner':''}`;
+      nameDiv.textContent = `${pid===winner?'🏆 ':''}${nameMap[pid]}`;
+      playerDiv.appendChild(nameDiv);
+
+      if (!caps.length) {
+        const emptyEl = document.createElement('span');
+        emptyEl.style.cssText = 'font-size:.65rem;color:#555';
+        emptyEl.textContent = '획득 카드 없음';
+        playerDiv.appendChild(emptyEl);
+      } else {
+        const typeOrder  = ['gwang','yeolkkut','ribbon','pi'];
+        const typeLabels = { gwang:'광', yeolkkut:'열끗', ribbon:'띠', pi:'피' };
+        const groups     = { gwang:[], yeolkkut:[], ribbon:[], pi:[] };
+        caps.forEach(c => { if (groups[c.type]) groups[c.type].push(c); });
+
+        typeOrder.forEach(type => {
+          const cs = groups[type];
+          if (!cs.length) return;
+          const capRow = document.createElement('div');
+          capRow.className = 'result-cap-row';
+          const lbl = document.createElement('span');
+          lbl.className = 'result-cap-label';
+          lbl.textContent = typeLabels[type];
+          capRow.appendChild(lbl);
+          cs.forEach(c => {
+            const img = document.createElement('div');
+            img.className = 'result-cap-card';
+            img.style.backgroundImage = `url('img/cards/${c.id}.png')`;
+            if (c.double) {
+              const badge = document.createElement('span');
+              badge.className = 'result-cap-badge';
+              badge.textContent = '×2';
+              img.appendChild(badge);
+            }
+            capRow.appendChild(img);
+          });
+          playerDiv.appendChild(capRow);
+        });
+
+        // 점수 내역 텍스트
+        const bd = r.breakdown || {};
+        const bdParts = [];
+        if (bd.gwang)  bdParts.push(`광 ${bd.gwang}점`);
+        if (bd.godori) bdParts.push(`고도리 ${bd.godori}점`);
+        if (bd.yeol)   bdParts.push(`열끗 ${bd.yeol}점`);
+        if (bd.ribbon) {
+          const subNote = bd.ribbonSubs?.length ? ` (${bd.ribbonSubs.join('·')})` : '';
+          bdParts.push(`띠 ${bd.ribbon}점${subNote}`);
+        }
+        if (bd.pi)     bdParts.push(`피 ${bd.pi}점`);
+        const bdDiv = document.createElement('div');
+        bdDiv.className = 'result-breakdown';
+        bdDiv.textContent = bdParts.length
+          ? `점수: ${bdParts.join(' + ')} = ${r.score}점`
+          : '점수: 0점';
+        playerDiv.appendChild(bdDiv);
+      }
+      el.appendChild(playerDiv);
+    });
+  }
 
   // ── 보유 점수 현황 ────────────────────────────────────────────────
   if (playerScores && Object.keys(playerScores).length > 0) {
@@ -1315,11 +1481,12 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
         <span style="margin-left:auto;font-size:.62rem;color:#777">손패 ${hs[pid]||0}</span>
       </div>
       <div class="opp-captured" id="oc-${pid}"></div>
-      <div class="opp-score">${sc.score}점 | 광${sc.counts.gwang} 열${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>
+      <div class="opp-score">${sc.score}점${sc.breakdown?.godori?` 🐦고도리`:''} &nbsp;광${sc.counts.gwang} 열${sc.counts.yeol} 띠${sc.counts.ribbon} 피${sc.counts.pi}</div>
       ${chips !== null ? `<div class="opp-chips">💰 보유: ${chips}점</div>` : ''}`;
 
     const capEl  = div.querySelector(`#oc-${pid}`);
     const chrysPi = gs?.chrysanthemumChoices?.[pid] === 'pi';
+    const CAP_SHORT = { gwang: '광', yeolkkut: '열', ribbon: '띠', pi: '피' };
     if (caps.length === 0) {
       const emp = document.createElement('span');
       emp.style.cssText = 'font-size:.62rem;color:#555';
@@ -1330,16 +1497,20 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
       CAP_TYPE_ORDER.forEach(type => {
         const cs = groups[type];
         if (!cs.length) return;
+        // 타입별 행: [광] [card][card] … (카드 많으면 wrap)
+        const typeRow = document.createElement('div');
+        typeRow.className = 'opp-type-row';
         const lbl = document.createElement('span');
         lbl.className = 'opp-cap-label';
-        lbl.textContent = CAP_TYPE_LABELS[type];
-        capEl.appendChild(lbl);
+        lbl.textContent = CAP_SHORT[type];
+        typeRow.appendChild(lbl);
         cs.forEach(c => {
           const img = document.createElement('div');
           img.className = 'opp-cap-card';
           img.style.backgroundImage = `url('img/cards/${c.id}.png')`;
-          capEl.appendChild(img);
+          typeRow.appendChild(img);
         });
+        capEl.appendChild(typeRow);
       });
     }
     row.appendChild(div);
@@ -1352,10 +1523,13 @@ function renderMyScore(sc, chips) {
   const chipsHtml    = chips !== undefined ? `<span class="sc-chips">💰 ${chips}점</span>` : '';
   const heundeulHtml = (gs?.heundeulMonths?.length > 0)
     ? `<span style="color:#7af;font-size:.72rem">🎋 흔들</span>` : '';
+  const godoriHtml   = breakdown?.godori
+    ? `<span style="color:var(--gold);font-size:.72rem">🐦 고도리+${breakdown.godori}</span>` : '';
   document.getElementById('my-score-panel').innerHTML = `
     <span class="sc-total">📊 ${score}점</span>
     ${chipsHtml}
     ${heundeulHtml}
+    ${godoriHtml}
     <span class="sc-item">광<span>${counts.gwang}</span></span>
     <span class="sc-item">열끗<span>${counts.yeol}</span></span>
     <span class="sc-item">띠<span>${counts.ribbon}</span></span>
@@ -1454,6 +1628,17 @@ function sendChat() {
   inp.value = '';
 }
 
+// ── 랜덤 닉네임 초기값 ────────────────────────────────────────────────
+const RANDOM_NAMES = [
+  '꽃사슴', '하늘달', '봄바람', '청룡이', '빨간장미',
+  '노란병아리', '초록거북', '파란하늘', '은빛별', '금빛해',
+  '달토끼', '산토끼', '강아지풀', '솔바람', '눈꽃이',
+  '무지개', '단풍잎', '벚꽃비', '여울물', '산들바람',
+  '고스톱왕', '화투달인', '패왕', '광쟁이', '피모아',
+  '대박나자', '고고씽', '운빨맨', '패감별사', '고도리왕',
+];
+document.getElementById('inp-name').value =
+  RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
 document.getElementById('inp-name').focus();
 </script>
 </body>

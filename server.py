@@ -59,8 +59,8 @@ DECK = [
     {'id': 43, 'month': 11, 'type': 'pi',       'sub': None,     'name': '오동피',   'double': False},
     {'id': 44, 'month': 12, 'type': 'gwang',    'sub': None,     'name': '비광',     'double': False},
     {'id': 45, 'month': 12, 'type': 'yeolkkut', 'sub': None,     'name': '비열끗',   'double': False},
-    {'id': 46, 'month': 12, 'type': 'pi',       'sub': None,     'name': '비쌍피',   'double': True},
-    {'id': 47, 'month': 12, 'type': 'pi',       'sub': None,     'name': '비피',     'double': False},
+    {'id': 46, 'month': 12, 'type': 'ribbon',    'sub': None,     'name': '비띠',     'double': False},
+    {'id': 47, 'month': 12, 'type': 'pi',       'sub': None,     'name': '비쌍피',   'double': True},
 ]
 
 
@@ -103,15 +103,12 @@ def get_effective_captured(game, pid):
 
 
 def check_chrysanthemum(room, pid):
-    """이번 턴에 국화(id:32)를 획득했으면 선택 팝업 요청"""
+    """국화(id:32)를 보유 중이고 아직 선택 안 했으면 선택 팝업 요청"""
     game    = room['game']
     choices = game.setdefault('chrysanthemum_choices', {})
     if pid in choices:
-        return
-    last     = game.get('lastPlay') or {}
-    hand_cap = last.get('handCaptured', [])
-    deck_cap = last.get('deckCaptured', [])
-    if 32 in hand_cap or 32 in deck_cap:
+        return  # 이미 선택함 — 변경 불가
+    if any(c['id'] == 32 for c in game['captured'][pid]):
         socketio.emit('choose_chrysanthemum', {}, to=pid)
 
 
@@ -134,14 +131,19 @@ def handle_chongtong(room, winner_pid, months):
     socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
     socketio.emit('special_event', {'msg': msg},                 to=room['id'])
 
+    # 파토 배율 적용
+    pato_mult    = room.pop('pato_mult', 1)
+    winner_total = 3 * pato_mult
+
     results = {
         pid: {
             'score':       3 if pid == winner_pid else 0,
-            'total':       3 if pid == winner_pid else 0,
+            'total':       winner_total if pid == winner_pid else 0,
             'goCount':     0,
-            'breakdown':   {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
+            'breakdown':   {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0, 'godori': 0},
             'counts':      {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0},
             'heundeulMult': 1,
+            'patoMult':    pato_mult if pid == winner_pid else 1,
             'chongtong':   pid == winner_pid,
         }
         for pid in game['playerIds']
@@ -151,12 +153,12 @@ def handle_chongtong(room, winner_pid, months):
     deltas        = {pid: 0 for pid in game['playerIds']}
 
     if player_scores:
-        gain = 3 * (n - 1)
+        gain = winner_total * (n - 1)
         deltas[winner_pid] = gain
         player_scores[winner_pid] = player_scores.get(winner_pid, 0) + gain
         for pid in game['playerIds']:
             if pid != winner_pid:
-                deduct = min(3, player_scores.get(pid, 0))
+                deduct = min(winner_total, player_scores.get(pid, 0))
                 deltas[pid] = -deduct
                 player_scores[pid] = player_scores.get(pid, 0) - deduct
 
@@ -175,6 +177,7 @@ def handle_chongtong(room, winner_pid, months):
         'deltas':       deltas,
         'roomOver':     room_over,
         'chongtong':    True,
+        'patoMult':     pato_mult,
     }, to=room['id'])
 
 
@@ -186,7 +189,7 @@ def calc_score(captured):
     pi_count = sum(2 if c['double'] else 1 for c in pi_all)
 
     score = 0
-    breakdown = {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0}
+    breakdown = {'gwang': 0, 'yeol': 0, 'ribbon': 0, 'pi': 0, 'godori': 0}
 
     gc = len(gwang)
     has_rain = any(c['month'] == 12 for c in gwang)
@@ -195,6 +198,12 @@ def calc_score(captured):
     elif gc >= 5: breakdown['gwang'] = 15
     score += breakdown['gwang']
 
+    # 고도리: 2월(id 4)·4월(id 12)·8월(id 29) 열끗 3장 → 5점
+    yeol_ids = {c['id'] for c in yeol}
+    if {4, 12, 29}.issubset(yeol_ids):
+        breakdown['godori'] = 5
+        score += 5
+
     if len(yeol) >= 5:
         breakdown['yeol'] = len(yeol) - 4
         score += breakdown['yeol']
@@ -202,10 +211,20 @@ def calc_score(captured):
     hong   = sum(1 for c in ribbons if c['sub'] == 'hong')
     cheong = sum(1 for c in ribbons if c['sub'] == 'cheong')
     plain  = sum(1 for c in ribbons if c['sub'] == 'plain')
-    if hong >= 3:         breakdown['ribbon'] += 3
-    if cheong >= 3:       breakdown['ribbon'] += 3
-    if plain >= 3:        breakdown['ribbon'] += 3
-    if len(ribbons) >= 5: breakdown['ribbon'] += len(ribbons) - 4
+    ribbon_subs = []
+    if hong >= 3:
+        breakdown['ribbon'] += 3
+        ribbon_subs.append('홍단')
+    if cheong >= 3:
+        breakdown['ribbon'] += 3
+        ribbon_subs.append('청단')
+    if plain >= 3:
+        breakdown['ribbon'] += 3
+        ribbon_subs.append('초단')
+    if len(ribbons) >= 5:
+        breakdown['ribbon'] += len(ribbons) - 4
+        ribbon_subs.append(f'{len(ribbons)}띠')
+    breakdown['ribbonSubs'] = ribbon_subs
     score += breakdown['ribbon']
 
     if pi_count >= 10:
@@ -390,6 +409,7 @@ def start_actual_game(room, first_pid=None):
         'chrysanthemum_choices': {},
         'heundeul_announced':   set(),
         'go_score_at':          {},   # pid → 마지막 고를 선언한 시점의 점수
+        'dokbak_pid':           None, # 독박: 고 후 추가 점수 없던 플레이어 (pid)
     }
 
     # 흔들기: 게임 시작 시 전체 공개 X — 해당 카드를 내는 시점에 공개
@@ -410,15 +430,19 @@ def end_game(room, stopper_id=None):
     name_map = {p['id']: p['name'] for p in room['players']}
     results = {}
     for pid in game['playerIds']:
-        s  = calc_score(get_effective_captured(game, pid))
-        go = game['goCount'][pid]
+        eff_cap = get_effective_captured(game, pid)
+        s       = calc_score(eff_cap)
+        go      = game['goCount'][pid]
         results[pid] = {
-            'score':       s['score'],
-            'total':       apply_go_bonus(s['score'], go),
-            'goCount':     go,
-            'breakdown':   s['breakdown'],
-            'counts':      s['counts'],
-            'heundeulMult': 1,
+            'score':         s['score'],
+            'total':         apply_go_bonus(s['score'], go),
+            'goCount':       go,
+            'breakdown':     s['breakdown'],
+            'counts':        s['counts'],
+            'heundeulMult':  1,
+            'bakMult':       1,    # 피박/광박 배율 (기본 1배)
+            'bakTypes':      [],   # ['피박', '광박'] 등
+            'capturedCards': eff_cap,
         }
     winner = stopper_id or max(game['playerIds'], key=lambda p: results[p]['total'])
 
@@ -429,21 +453,99 @@ def end_game(room, stopper_id=None):
         results[winner]['total']       *= mult
         results[winner]['heundeulMult'] = mult
 
-    # ── 총점 교환 ──────────────────────────────────────────────────────
+    # ── 파토 배율 적용 (파토가 누적된 경우) ──────────────────────────────
+    pato_mult = room.pop('pato_mult', 1)
+    if pato_mult > 1:
+        results[winner]['total']    *= pato_mult
+        results[winner]['patoMult']  = pato_mult
+
+    # ── 피박/광박 조건 확인 (승자 기준) ──────────────────────────────────
+    w_counts    = results[winner]['counts']
+    w_breakdown = results[winner]['breakdown']
+    # 피박: 승자 피 10장+ (= 피 점수 1점+) 이면 조건 성립
+    pi_bak_cond    = w_counts['pi'] >= 10
+    # 광박: 승자 광 3장+ 이고 2점+ 이면 조건 성립 (비광 포함 3장 = 2점)
+    gwang_bak_cond = w_counts['gwang'] >= 3 and w_breakdown['gwang'] >= 2
+
+    # ── 총점 교환 (독박·박 배율 반영) ────────────────────────────────────
     player_scores = room.get('player_scores', {})
     winner_total  = results[winner]['total']
     n             = len(game['playerIds'])
     deltas        = {pid: 0 for pid in game['playerIds']}
+    bak_messages  = []
+
+    # 독박 적용 여부 (3인 이상 게임에서만)
+    dokbak_pid    = game.get('dokbak_pid')
+    if n < 3:
+        dokbak_pid = None
+    dokbak_applies = (dokbak_pid is not None and
+                      dokbak_pid != winner and
+                      dokbak_pid in game['playerIds'])
 
     if winner_total > 0 and player_scores:
-        gain = winner_total * (n - 1)
-        deltas[winner] = gain
-        player_scores[winner] = player_scores.get(winner, 0) + gain
+        winner_gain = 0
+
+        # 먼저 모든 패자의 박 배율 계산
         for pid in game['playerIds']:
-            if pid != winner:
-                deduct = min(winner_total, player_scores.get(pid, 0))
-                deltas[pid] = -deduct
-                player_scores[pid] = player_scores.get(pid, 0) - deduct
+            if pid == winner:
+                continue
+            l_counts  = results[pid]['counts']
+            bak_mult  = 1
+            bak_types = []
+            if pi_bak_cond and l_counts['pi'] <= 5:
+                bak_mult *= 2
+                bak_types.append('피박')
+            if gwang_bak_cond and l_counts['gwang'] == 0:
+                bak_mult *= 2
+                bak_types.append('광박')
+            results[pid]['bakMult']  = bak_mult
+            results[pid]['bakTypes'] = bak_types
+
+        if dokbak_applies:
+            # ── 독박: 한 명이 모든 패자 몫을 홀로 부담 ──────────────────
+            total_deduct = sum(
+                winner_total * results[pid]['bakMult']
+                for pid in game['playerIds'] if pid != winner
+            )
+            winner_gain  = total_deduct
+            actual       = min(total_deduct, player_scores.get(dokbak_pid, 0))
+            deltas[dokbak_pid]        = -actual
+            player_scores[dokbak_pid] = player_scores.get(dokbak_pid, 0) - actual
+            # 다른 패자 차감 없음 (deltas 기본값 0 유지), bakTypes 초기화
+            for pid in game['playerIds']:
+                if pid != winner and pid != dokbak_pid:
+                    results[pid]['bakMult']  = 1
+                    results[pid]['bakTypes'] = []
+            bak_note = ''
+            if results[dokbak_pid]['bakTypes']:
+                bak_str  = '+'.join(results[dokbak_pid]['bakTypes'])
+                bak_note = f' ({bak_str} ×{results[dokbak_pid]["bakMult"]}배)'
+            bak_messages.append(
+                f'🔴 독박! {name_map[dokbak_pid]}{bak_note} — 모든 패자 몫 {total_deduct}점 혼자 부담!'
+            )
+        else:
+            # ── 일반: 각 패자가 개별 차감 ────────────────────────────────
+            for pid in game['playerIds']:
+                if pid == winner:
+                    continue
+                this_deduct  = winner_total * results[pid]['bakMult']
+                winner_gain += this_deduct                      # 승자는 이론상 전액 획득
+                actual       = min(this_deduct, player_scores.get(pid, 0))
+                deltas[pid]  = -actual
+                player_scores[pid] = player_scores.get(pid, 0) - actual
+                if results[pid]['bakTypes']:
+                    bak_str = '+'.join(results[pid]['bakTypes'])
+                    bak_messages.append(
+                        f'💥 {name_map[pid]} {bak_str}! (×{results[pid]["bakMult"]}배 차감)'
+                    )
+
+        deltas[winner] = winner_gain
+        player_scores[winner] = player_scores.get(winner, 0) + winner_gain
+
+    # 박 알림
+    for msg in bak_messages:
+        socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+        socketio.emit('special_event', {'msg': msg},                 to=room['id'])
 
     # ── 방 종료 조건 ────────────────────────────────────────────────────
     room_over = bool(player_scores) and any(
@@ -461,6 +563,8 @@ def end_game(room, stopper_id=None):
         'playerScores': player_scores,
         'deltas':       deltas,
         'roomOver':     room_over,
+        'patoMult':     pato_mult,
+        'dokbakPid':    dokbak_pid,
     }, to=room['id'])
 
 
@@ -493,6 +597,40 @@ def process_deck_card(room, pid):
         return
 
     deck_card = game['deck'].pop(0)
+
+    # ── 쌓인 패 형성: 손패 1-1 획득 후 덱 카드가 동일 월이면 캡처 취소 ──────
+    # (손패가 바닥 1장을 가져갔는데, 덱 카드도 같은 월 → 3장이 바닥에 쌓임)
+    last = game.get('lastPlay') or {}
+    hand_card_last   = last.get('handCard')
+    hand_captured_ids = last.get('handCaptured', [])
+    if (hand_card_last and
+            len(hand_captured_ids) == 2 and           # 1-1 캡처 (낸 패 + 바닥 1장)
+            deck_card['month'] == hand_card_last['month'] and
+            not any(c['month'] == hand_card_last['month'] for c in game['field'])):
+        # 1-1 캡처로 가져간 2장을 captured에서 꺼내 다시 바닥으로
+        id_list = list(hand_captured_ids)
+        returned, remaining = [], []
+        for c in game['captured'][pid]:
+            if c['id'] in id_list:
+                returned.append(c)
+                id_list.remove(c['id'])
+            else:
+                remaining.append(c)
+        game['captured'][pid] = remaining
+        game['field'].extend(returned)
+        game['field'].append(deck_card)
+        # lastPlay 업데이트 (특수이벤트 감지용)
+        last['handCaptured'] = []
+        last['deckCard']     = deck_card
+        last['deckCaptured'] = []
+        # 쌓인 패 형성 알림
+        name_map = {p['id']: p['name'] for p in room['players']}
+        msg = f'📚 {name_map[pid]} — {deck_card["month"]}월 쌓인 패 형성! (3장 바닥에 쌓임)'
+        socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+        socketio.emit('special_event', {'msg': msg},                 to=room['id'])
+        after_deck_card(room, pid)
+        return
+
     matches = [c for c in game['field'] if c['month'] == deck_card['month']]
 
     if len(matches) == 2:
@@ -518,19 +656,66 @@ def process_deck_card(room, pid):
     after_deck_card(room, pid)
 
 
+def handle_pato(room):
+    """파토: 모든 손패 소진 후 아무도 나지 못한 경우 — 다음 게임 배율 2배 누적"""
+    game     = room['game']
+    name_map = {p['id']: p['name'] for p in room['players']}
+
+    room['pato_mult'] = room.get('pato_mult', 1) * 2
+    mult = room['pato_mult']
+
+    msg = f'🔄 파토! 아무도 나지 못했습니다. 다음 게임은 {mult}배 게임입니다.'
+    socketio.emit('chat',          {'system': True, 'msg': msg}, to=room['id'])
+    socketio.emit('special_event', {'msg': msg},                 to=room['id'])
+
+    room['game_count'] = room.get('game_count', 0) + 1
+    room['state']      = 'between_games'
+
+    socketio.emit('game_over', {
+        'winner':       None,
+        'nameMap':      name_map,
+        'results':      {},
+        'playerScores': room.get('player_scores', {}),
+        'deltas':       {pid: 0 for pid in game['playerIds']},
+        'roomOver':     False,
+        'pato':         True,
+        'patoMult':     mult,
+    }, to=room['id'])
+
+
 def after_deck_card(room, pid):
     game = room['game']
     detect_and_apply_special_events(room, pid)   # 쪽/따닥/쌓인패/쓸
     check_chrysanthemum(room, pid)               # 국화 선택 팝업
-    all_empty = all(len(game['hands'][p]) == 0 for p in game['playerIds'])
-    score     = calc_score(get_effective_captured(game, pid))['score']   # 국화 선택 반영
 
-    if score >= 3 and not all_empty:
-        # 직전 고 이후 추가 점수가 없으면 대화 없이 자동 다음 턴
+    all_empty     = all(len(game['hands'][p]) == 0 for p in game['playerIds'])
+    my_hand_empty = len(game['hands'][pid]) == 0          # 현재 플레이어 손패 소진 여부
+    score         = calc_score(get_effective_captured(game, pid))['score']
+
+    # 2인 게임은 7점, 3인 이상은 3점이 나는 기준
+    n         = len(game['playerIds'])
+    min_score = 7 if n == 2 else 3
+
+    if score >= min_score:
         go_score_at = game.get('go_score_at', {})
         can_go      = pid not in go_score_at or score > go_score_at[pid]
 
-        if not can_go:
+        if my_hand_empty:
+            # ── 마지막 패를 냈음 → 고/스톱 팝업 없이 자동 처리 ──────────
+            if pid in go_score_at and score <= go_score_at[pid]:
+                # 고를 한 상태인데 추가 점수 없음 → 독박 마킹 후 탈락
+                game['dokbak_pid'] = pid
+                if all_empty:
+                    handle_pato(room)   # 모두 패 소진 + 아무도 못 남 → 파토
+                else:
+                    next_turn(room)
+                    broadcast_state(room)
+            else:
+                # 추가 점수 있음 OR 고를 안 했음 → 자동 스톱 (승리)
+                end_game(room, pid)
+        elif not can_go:
+            # 직전 고 이후 추가 점수 없음 → 독박 마킹 후 다음 턴
+            game['dokbak_pid'] = pid
             next_turn(room)
             broadcast_state(room)
         else:
@@ -542,7 +727,11 @@ def after_deck_card(room, pid):
                 'name':  name_map[pid],
                 'score': score,
             }, to=room['id'])
-    elif all_empty or not game['deck']:
+    elif all_empty:
+        # 모든 손패 소진 + 아무도 min_score 미달 → 파토
+        handle_pato(room)
+    elif not game['deck']:
+        # 덱 소진 → 일반 게임 종료 (최고점자 승리)
         end_game(room)
     else:
         next_turn(room)
@@ -883,7 +1072,8 @@ def on_go_stop(data):
         go_score_at   = game.setdefault('go_score_at', {})
         if pid in go_score_at and current_score <= go_score_at[pid]:
             return  # 추가 점수 없음 — 고 불가 (클라이언트 우회 방지)
-        go_score_at[pid] = current_score  # 고 선언 시점 점수 기록
+        go_score_at[pid]      = current_score  # 고 선언 시점 점수 기록
+        game['dokbak_pid']    = None           # 새 고 선언 시 독박 초기화
         game['goCount'][pid] += 1
         name   = socket_names.get(sid, '플레이어')
         go_msg = f'🔥 {name}이(가) 고! ({game["goCount"][pid]}고)'
