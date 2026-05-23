@@ -210,6 +210,7 @@ body {
 .field-section {
   flex: 1; display: flex; align-items: center; justify-content: center;
   gap: 8px; padding: 6px 8px; overflow: hidden; min-height: 0;
+  position: relative;
 }
 .field-cards {
   display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;
@@ -448,35 +449,32 @@ body {
 @keyframes toastIn  { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
 @keyframes toastOut { from { opacity:1; } to { opacity:0; transform:translateY(-6px); } }
 
-/* ── LAST PLAY ANIMATION ── */
-#lpa-overlay {
-  position: fixed;
-  top: 42%; left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 80;
-  pointer-events: none;
-  background: rgba(4,14,4,.93);
-  border: 1px solid rgba(74,138,74,.65);
-  border-radius: 12px;
-  padding: 9px 16px;
-  text-align: center;
-  transition: opacity 0.2s ease;
-  min-width: 90px;
+/* ── 낸 패 바닥 표시 (play-match) ── */
+.card.play-match {
+  border: 2px solid var(--gold) !important;
+  box-shadow: 0 0 0 2px rgba(240,192,64,.5), 0 0 18px rgba(240,192,64,.75) !important;
+  position: relative;
+  z-index: 6 !important;
 }
-.lpa-label { font-size: .63rem; color: #8ab; margin-bottom: 5px; letter-spacing: .02em; }
-.lpa-phase { display: flex; align-items: center; gap: 5px; justify-content: center; flex-wrap: wrap; }
-.lpa-card  {
-  width: 42px; height: 62px; flex-shrink: 0;
-  background-size: 100% 100%; background-color: #fff;
-  border-radius: 4px; border: 1px solid rgba(255,255,255,.2);
-}
-.lpa-card.lpa-hi {
-  border: 2px solid var(--gold);
-  box-shadow: 0 0 10px rgba(240,192,64,.55);
-}
-.lpa-plus { color: var(--gold); font-size: 1.1rem; font-weight: bold; line-height: 1; }
 
-/* 바닥에 그냥 놓인 패 글로우 */
+/* 낸 패 레이블 (바닥 위) */
+#field-play-label {
+  position: absolute;
+  bottom: 6px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(4,14,4,.88);
+  border: 1px solid rgba(240,192,64,.5);
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: .62rem;
+  color: var(--gold);
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+  transition: opacity .25s ease;
+}
+
+/* 내 미스 패 글로우 */
 @keyframes missGlow {
   0%   { box-shadow: 0 0 0 3px var(--gold), 0 0 14px rgba(240,192,64,.7); }
   80%  { box-shadow: 0 0 0 2px rgba(240,192,64,.3), 0 0 5px rgba(240,192,64,.15); }
@@ -580,6 +578,7 @@ body {
   <div class="opponents-row" id="opponents-row"></div>
   <div class="field-section">
     <div class="field-cards" id="field-cards"></div>
+    <div id="field-play-label" style="display:none;opacity:0"></div>
     <div class="deck-area">
       <div class="deck-pile">
         <span style="font-size:1.3rem">🀫</span>
@@ -669,9 +668,6 @@ body {
   </div>
 </div>
 
-<!-- ══ LAST PLAY ANIMATION ══ -->
-<div id="lpa-overlay" style="display:none;opacity:0"><div id="lpa-content"></div></div>
-
 <script>
 // ── 전역 상태 ────────────────────────────────────────────────────────
 const socket = io();
@@ -686,9 +682,10 @@ let isHost     = false;
 let fdMyPicked = false;  // 선 결정에서 내가 골랐는지
 let lastPlayedHandCardId = null; // 손패→바닥 카드 ID (덱 뒤집기와 구분)
 let lastAnimLpId = null;         // 마지막으로 애니메이션한 lastPlay handCard id
-let missGlowIds  = new Set();    // 바닥에 낸 패(미스) 글로우 카드 ID 집합
-let _lpaT1 = null, _lpaT2 = null;
-let skipNextAnim = false;        // 내가 직접 낸 패는 애니메이션 스킵
+let missGlowIds  = new Set();    // 내 미스 패 glow 대상 ID 집합
+let skipNextAnim = false;        // 내가 직접 낸 패는 바닥 애니메이션 스킵
+let cardById     = {};           // id → 카드 전체 정보 (lookup용)
+let _fpT1 = null, _fpT2 = null; // showFieldPlay 타이머
 
 // ── 효과음 (Web Audio API) ────────────────────────────────────────────
 const _ACtx = window.AudioContext || window.webkitAudioContext;
@@ -813,68 +810,132 @@ function showToast(msg, duration = 2400) {
   }, fadeOut);
 }
 
-// ── 낸 패 애니메이션 ──────────────────────────────────────────────────
-function showLastPlayAnim(lp, nameMap, playerId) {
-  if (!lp || !lp.handCard) return;
-  const overlay = document.getElementById('lpa-overlay');
-  const content = document.getElementById('lpa-content');
-  if (!overlay || !content) return;
+// ── 카드 ID 룩업 테이블 갱신 ─────────────────────────────────────────
+function updateCardLookup(state) {
+  (state.field  || []).forEach(c => { cardById[c.id] = c; });
+  (state.myHand || []).forEach(c => { cardById[c.id] = c; });
+  Object.values(state.captured || {}).forEach(arr => arr.forEach(c => { cardById[c.id] = c; }));
+}
 
-  if (_lpaT1) { clearTimeout(_lpaT1); _lpaT1 = null; }
-  if (_lpaT2) { clearTimeout(_lpaT2); _lpaT2 = null; }
+// ── 바닥 임시 렌더 (애니메이션용, deal-in 없음) ──────────────────────
+function renderFieldTemp(cards, highlightIds) {
+  const el = document.getElementById('field-cards');
+  el.innerHTML = '';
 
-  const name = (nameMap && playerId && nameMap[playerId]) ? nameMap[playerId] : '상대';
+  const byMonth = {};
+  cards.forEach(c => { (byMonth[c.month] = byMonth[c.month] || []).push(c); });
+  const months = Object.keys(byMonth).map(Number).sort((a, b) => a - b);
 
-  function cardDiv(id, hi) {
-    return `<div class="lpa-card${hi ? ' lpa-hi' : ''}" style="background-image:url('img/cards/${id}.png')"></div>`;
-  }
-
-  function buildPhaseHTML(label, cardEntries) {
-    let h = `<div class="lpa-label">${label}</div><div class="lpa-phase">`;
-    cardEntries.forEach((e, i) => {
-      if (i > 0) h += '<div class="lpa-plus">+</div>';
-      h += cardDiv(e.id, e.hi);
-    });
-    h += '</div>';
-    return h;
-  }
-
-  // Phase 1: hand card
-  const handMiss = Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0;
-  const p1cards  = [{ id: lp.handCard.id, hi: true }];
-  if (!handMiss && Array.isArray(lp.handCaptured)) {
-    lp.handCaptured.forEach(id => {
-      if (id !== lp.handCard.id) p1cards.push({ id, hi: false });
-    });
-  }
-
-  content.innerHTML = buildPhaseHTML(`${name}의 패`, p1cards);
-  overlay.style.display = 'block';
-  requestAnimationFrame(() => { overlay.style.opacity = '1'; });
-
-  // Phase 2: deck card (1.8s later)
-  _lpaT1 = setTimeout(() => {
-    _lpaT1 = null;
-    if (!lp.deckCard || !Array.isArray(lp.deckCaptured)) {
-      overlay.style.opacity = '0';
-      _lpaT2 = setTimeout(() => { overlay.style.display = 'none'; _lpaT2 = null; }, 220);
-      return;
-    }
-    const deckMiss = lp.deckCaptured.length === 0;
-    const p2cards  = [{ id: lp.deckCard.id, hi: true }];
-    if (!deckMiss) {
-      lp.deckCaptured.forEach(id => {
-        if (id !== lp.deckCard.id) p2cards.push({ id, hi: false });
+  months.forEach(month => {
+    const mc = byMonth[month];
+    const mkOne = c => {
+      const hi = highlightIds.has(c.id);
+      return makeCard(c, { extraClass: hi ? 'play-match' : '' });
+    };
+    if (mc.length >= 3) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'card-stack';
+      mc.forEach((c, i) => {
+        const cd = mkOne(c);
+        cd.style.position = 'absolute';
+        cd.style.top  = `${i * 3}px`;
+        cd.style.left = `${i * 3}px`;
+        cd.style.zIndex = highlightIds.has(c.id) ? 10 : i;
+        wrapper.appendChild(cd);
       });
+      el.appendChild(wrapper);
+    } else {
+      mc.forEach(c => el.appendChild(mkOne(c)));
     }
-    content.innerHTML = buildPhaseHTML(deckMiss ? '덱 → 바닥' : '덱 카드', p2cards);
+  });
+  // prevFieldIds를 temp 상태에 맞게 갱신 → 이후 renderField에서 불필요한 deal-in 방지
+  prevFieldIds = new Set(cards.map(c => c.id));
+}
 
-    _lpaT2 = setTimeout(() => {
-      _lpaT2 = null;
-      overlay.style.opacity = '0';
-      setTimeout(() => { overlay.style.display = 'none'; }, 220);
-    }, 1600);
-  }, 1800);
+// ── 바닥 레이블 표시/숨김 ─────────────────────────────────────────────
+function setFieldLabel(text) {
+  const el = document.getElementById('field-play-label');
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.style.display = 'block';
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+  } else {
+    el.style.opacity = '0';
+    setTimeout(() => { el.style.display = 'none'; el.textContent = ''; }, 260);
+  }
+}
+
+// ── 상대 낸 패를 바닥에서 잠시 보여주는 애니메이션 ─────────────────────
+function showFieldPlay(lp, state, nameMap, prevPlayerId) {
+  if (!lp || !lp.handCard || !Array.isArray(lp.deckCaptured)) return;
+
+  if (_fpT1) { clearTimeout(_fpT1); _fpT1 = null; }
+  if (_fpT2) { clearTimeout(_fpT2); _fpT2 = null; }
+
+  const name     = (nameMap && prevPlayerId && nameMap[prevPlayerId]) ? nameMap[prevPlayerId] : '상대';
+  const handCard = lp.handCard;
+  const deckCard = lp.deckCard;
+  const handMiss = lp.handCaptured.length === 0;
+  const deckMiss = lp.deckCaptured.length === 0;
+
+  // ── 즉시: field 제외 나머지 UI 갱신 ────────────────────────────────
+  const s = state;
+  document.getElementById('deck-count').textContent  = s.deckSize;
+  document.getElementById('deck-count2').textContent = s.deckSize;
+  document.getElementById('my-hand-count').textContent = s.myHand.length;
+  // 내 차례면 손패 즉시 활성화 (애니메이션 중에도 플레이 가능)
+  renderMyHand(s.myHand, s.isMyTurn && s.phase === 'play');
+  renderMyCaptured((s.captured[myId] || []));
+  renderOpponents(s.playerIds, s.nameMap, s.handSizes, s.captured, s.scores, s.goCount, s.currentPlayerId, s.playerScores);
+  renderMyScore(s.scores[myId], s.playerScores?.[myId]);
+  if (s.isMyTurn && s.phase === 'play') {
+    setStatus('내 차례 — 손패에서 카드를 선택하세요', true);
+  } else {
+    setStatus(`${name}이(가) 방금 냈습니다`, false);
+  }
+
+  // ── Phase 1: 손패 ────────────────────────────────────────────────
+  // 잡은 경우: handCard + 매칭된 바닥 패를 필드에 다시 보여줌
+  // 미스인 경우: handCard는 이미 state.field에 있음
+  let tf1 = [...s.field];
+  let hi1 = new Set();
+  if (handMiss) {
+    hi1.add(handCard.id);
+  } else {
+    const matchCards = lp.handCaptured
+      .filter(id => id !== handCard.id)
+      .map(id => cardById[id]).filter(Boolean);
+    tf1 = [...tf1, handCard, ...matchCards];
+    lp.handCaptured.forEach(id => hi1.add(id));
+  }
+  renderFieldTemp(tf1, hi1);
+  setFieldLabel(`${name}의 패`);
+
+  _fpT1 = setTimeout(() => {
+    _fpT1 = null;
+
+    // ── Phase 2: 덱 카드 ─────────────────────────────────────────
+    let tf2 = [...s.field];
+    let hi2 = new Set();
+    if (deckMiss) {
+      hi2.add(deckCard.id);
+    } else {
+      const matchCards = lp.deckCaptured
+        .filter(id => id !== deckCard.id)
+        .map(id => cardById[id]).filter(Boolean);
+      tf2 = [...tf2, deckCard, ...matchCards];
+      lp.deckCaptured.forEach(id => hi2.add(id));
+    }
+    renderFieldTemp(tf2, hi2);
+    setFieldLabel(`${name} — 덱`);
+
+    _fpT2 = setTimeout(() => {
+      _fpT2 = null;
+      setFieldLabel(null);
+      renderAll(state); // 실제 상태로 최종 렌더
+    }, 1000);
+  }, 1200);
 }
 
 // ── 획득 카드 토글 ────────────────────────────────────────────────────
@@ -1125,43 +1186,45 @@ socket.on('game_started', d => {
   lastAnimLpId = null;
   skipNextAnim = false;
   missGlowIds.clear();
-  if (_lpaT1) { clearTimeout(_lpaT1); _lpaT1 = null; }
-  if (_lpaT2) { clearTimeout(_lpaT2); _lpaT2 = null; }
-  const ov = document.getElementById('lpa-overlay');
-  if (ov) { ov.style.opacity = '0'; ov.style.display = 'none'; }
+  if (_fpT1) { clearTimeout(_fpT1); _fpT1 = null; }
+  if (_fpT2) { clearTimeout(_fpT2); _fpT2 = null; }
+  setFieldLabel(null);
   show('s-game');
 });
 
 socket.on('game_state', state => {
-  const lp = state.lastPlay;
+  const lp           = state.lastPlay;
+  const prevPlayerId = gs?.currentPlayerId; // 이전 gs의 현재 플레이어 = 방금 낸 사람
 
-  // ── 낸 패 애니메이션 ─────────────────────────────────────────────
-  // deckCaptured가 배열일 때만 완성된 턴 → 애니메이션 발동
-  if (lp && lp.handCard && Array.isArray(lp.deckCaptured) && lp.handCard.id !== lastAnimLpId) {
+  updateCardLookup(state); // 카드 ID 룩업 갱신 (플레이 전 바닥 정보 포함)
+
+  gs    = state;
+  myId  = state.myId;
+
+  // ── 낸 패 바닥 애니메이션 ────────────────────────────────────────
+  const isCompletedPlay = lp && lp.handCard && Array.isArray(lp.deckCaptured);
+  if (isCompletedPlay && lp.handCard.id !== lastAnimLpId) {
     lastAnimLpId = lp.handCard.id;
+
     if (skipNextAnim) {
-      // 내 플레이 — 오버레이 대신 miss-glow만 처리
-      if (Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0) {
-        missGlowIds.add(lp.handCard.id);
-      }
+      // 내 플레이: 즉시 렌더, 내 미스 패에만 glow
       skipNextAnim = false;
+      if (lp.handCaptured.length === 0) missGlowIds.add(lp.handCard.id);
+      renderAll(state);
     } else {
-      // 상대 플레이 — 풀 애니메이션
-      if (Array.isArray(lp.handCaptured) && lp.handCaptured.length === 0) {
-        missGlowIds.add(lp.handCard.id);
-      }
-      const prevPlayerId = gs?.currentPlayerId; // 이전 상태의 currentPlayer = 방금 낸 사람
-      showLastPlayAnim(lp, state.nameMap, prevPlayerId);
+      // 상대 플레이: 바닥에 카드 겹쳐 보여주는 애니메이션
+      showFieldPlay(lp, state, state.nameMap, prevPlayerId);
     }
-  } else if (skipNextAnim && lp && lp.handCard && !Array.isArray(lp.deckCaptured)) {
-    // 중간 단계(덱 카드 대기) — 스킵 플래그 유지
   } else {
-    skipNextAnim = false;
+    // 중간 단계(choose_deck_field) 또는 새 게임 초기 상태
+    if (!isCompletedPlay && skipNextAnim) {
+      // 내 플레이 중간 단계 — 스킵 플래그 유지
+    } else {
+      skipNextAnim = false;
+    }
+    renderAll(state);
   }
 
-  gs = state;
-  myId = state.myId;
-  renderAll(state);
   // 국화(id:32) 보유 중인데 아직 선택 안 했으면 팝업 표시 (안전장치)
   const hasChrys = (state.captured?.[myId] || []).some(c => c.id === 32);
   if (hasChrys && !state.chrysanthemumChoices?.[myId]) {
