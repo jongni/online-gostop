@@ -454,55 +454,21 @@ body {
 @keyframes toastIn  { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
 @keyframes toastOut { from { opacity:1; } to { opacity:0; transform:translateY(-6px); } }
 
-/* ── 낸 패 카드 쌍 오버레이 (바닥 위) ── */
-#field-play-label {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 110;           /* ov-wait(100)보다 높게 */
+/* ── 낸 패 바닥 겹침 애니메이션 레이어 ── */
+#fp-anim-layer {
+  position: fixed; inset: 0;
   pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  background: rgba(4,14,4,.94);
-  border: 2px solid rgba(240,192,64,.75);
-  border-radius: 14px;
-  padding: 10px 18px 12px;
-  transition: opacity .25s ease;
-  min-width: 80px;
+  z-index: 55;
+  overflow: hidden;
 }
-.fp-label {
-  font-size: .65rem;
-  color: var(--gold);
-  text-align: center;
-  letter-spacing: .04em;
-  white-space: nowrap;
-}
-.fp-cards {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.fp-card {
-  width: var(--card-w);
-  height: var(--card-h);
+.fp-float-card {
+  position: fixed;
   background-size: 100% 100%;
   background-color: #fff;
-  border-radius: 5px;
-  flex-shrink: 0;
-  position: relative;
-}
-.fp-card.fp-played {
+  border-radius: 6px;
   border: 2px solid var(--gold);
-  box-shadow: 0 0 18px rgba(240,192,64,.85), 0 0 6px rgba(240,192,64,.5);
-  z-index: 2;
-}
-.fp-card.fp-matched {
-  border: 2px solid rgba(240,192,64,.5);
-  margin-left: -16px;
-  z-index: 1;
-  box-shadow: 0 0 8px rgba(240,192,64,.3);
+  box-shadow: 0 0 0 2px rgba(240,192,64,.55), 0 6px 24px rgba(0,0,0,.72);
+  pointer-events: none;
 }
 
 /* 내 미스 패 글로우 */
@@ -607,9 +573,9 @@ body {
     <span class="deck-info">덱 <span id="deck-count">0</span>장</span>
   </div>
   <div class="opponents-row" id="opponents-row"></div>
+  <div id="fp-anim-layer"></div>
   <div class="field-section">
     <div class="field-cards" id="field-cards"></div>
-    <div id="field-play-label" style="display:none;opacity:0"></div>
     <div class="deck-area">
       <div class="deck-pile">
         <span style="font-size:1.3rem">🀫</span>
@@ -883,54 +849,140 @@ function renderFieldTemp(cards, highlightIds) {
   prevFieldIds = new Set(cards.map(c => c.id));
 }
 
-// ── 상대 낸 패를 바닥 위 오버레이로 잠시 보여주는 애니메이션 ──────────
+// ── 낸 패를 바닥의 매칭 카드 위에 직접 겹쳐서 보여주는 애니메이션 ────
 function showFieldPlay(lp, state, nameMap, prevPlayerId) {
   if (!lp || !lp.handCard || !Array.isArray(lp.deckCaptured)) return;
 
   if (_fpT1) { clearTimeout(_fpT1); _fpT1 = null; }
   if (_fpT2) { clearTimeout(_fpT2); _fpT2 = null; }
 
-  // 즉시 실제 상태로 전체 렌더 (바닥 포함) — ov-wait도 이 시점에 해제됨
-  renderAll(state);
+  const layer = document.getElementById('fp-anim-layer');
+  if (layer) layer.innerHTML = '';
 
-  const name     = (nameMap && prevPlayerId && nameMap[prevPlayerId]) ? nameMap[prevPlayerId] : '상대';
+  const name     = nameMap?.[prevPlayerId] || '상대';
   const handCard = lp.handCard;
   const deckCard = lp.deckCard;
   const handMiss = lp.handCaptured.length === 0;
   const deckMiss = lp.deckCaptured.length === 0;
 
-  const el = document.getElementById('field-play-label');
-  if (!el) return;
+  // 손패로 잡은 바닥 카드 ID (손패 자신 제외)
+  const handFieldMatchIds = handMiss ? [] : lp.handCaptured.filter(id => id !== handCard.id);
+  // 덱으로 잡은 바닥 카드 ID (덱카드 자신 제외; 쪽이면 handCard.id 포함)
+  const deckFieldMatchIds = deckMiss ? [] : lp.deckCaptured.filter(id => id !== deckCard?.id);
 
-  // HTML 빌더: 낸 패 + 맞춰진 패를 카드 이미지로 표시
-  function buildOverlay(label, playedCard, capturedIds) {
-    const matchedIds = capturedIds.filter(id => id !== playedCard.id);
-    let html = `<div class="fp-label">${label}</div><div class="fp-cards">`;
-    html += `<div class="fp-card fp-played" style="background-image:url('img/cards/${playedCard.id}.png')"></div>`;
-    matchedIds.forEach(id => {
-      const c = cardById[id];
-      if (c) html += `<div class="fp-card fp-matched" style="background-image:url('img/cards/${c.id}.png')"></div>`;
-    });
-    html += '</div>';
-    return html;
+  // ── 임시 바닥 구성: 실제 바닥 + 획득으로 사라진 매칭 카드를 복원 ──
+  const tempField = [...state.field];
+  const tempSeen  = new Set(tempField.map(c => c.id));
+  const addToTemp = id => {
+    if (tempSeen.has(id)) return;
+    const c = id === handCard.id  ? handCard
+            : id === deckCard?.id ? deckCard
+            : cardById[id];
+    if (c) { tempField.push(c); tempSeen.add(id); }
+  };
+  handFieldMatchIds.forEach(addToTemp);
+  deckFieldMatchIds.forEach(addToTemp);
+
+  // ── 바닥 외 UI 갱신 ─────────────────────────────────────────────────
+  const s = state;
+  document.getElementById('deck-count').textContent  = s.deckSize;
+  document.getElementById('deck-count2').textContent = s.deckSize;
+  document.getElementById('my-hand-count').textContent = s.myHand.length;
+  renderMyHand(s.myHand, s.isMyTurn && s.phase === 'play');
+  renderMyCaptured(s.captured[myId] || []);
+  renderOpponents(s.playerIds, s.nameMap, s.handSizes, s.captured, s.scores, s.goCount, s.currentPlayerId, s.playerScores);
+  renderMyScore(s.scores[myId], s.playerScores?.[myId]);
+  document.getElementById('ov-wait').classList.remove('active');
+  if (s.isMyTurn && s.phase === 'play') {
+    setStatus('내 차례 — 손패에서 카드를 선택하세요', true);
+  } else {
+    setStatus(`${s.nameMap[s.currentPlayerId] || name}의 차례`, false);
   }
 
-  // Phase 1: 손패 카드 (1.5s 표시)
-  el.innerHTML = buildOverlay(`${name}의 패`, handCard, handMiss ? [] : lp.handCaptured);
-  el.style.display = 'flex';
-  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  // ── 임시 바닥 렌더 (deal-in 애니 없이) ─────────────────────────────
+  prevFieldIds = new Set(tempField.map(c => c.id));
+  renderField(tempField);
+
+  if (!layer) { renderAll(state); return; }
+
+  const fieldEl = document.getElementById('field-cards');
+
+  // 낸 패를 바닥의 targetId 카드 위에 겹치는 fixed 엘리먼트 생성
+  function placeFloat(playedCard, targetId) {
+    if (!playedCard || targetId === undefined) return null;
+    const targetEl = fieldEl.querySelector(`[data-id="${targetId}"]`);
+    if (!targetEl) return null;
+    const r  = targetEl.getBoundingClientRect();
+    const cw = r.width, ch = r.height;
+
+    const div = document.createElement('div');
+    div.className = 'fp-float-card';
+    div.dataset.cardId = playedCard.id;
+    // 매칭된 바닥 카드에 ~45% 오른쪽으로 겹쳐 배치
+    div.style.cssText = `
+      left:${r.left + cw * 0.44}px;
+      top:${r.top - ch * 0.06}px;
+      width:${cw}px;
+      height:${ch}px;
+      background-image:url('img/cards/${playedCard.id}.png');
+      opacity:0;
+      transform:rotate(-5deg) scale(1.06);
+    `;
+    layer.appendChild(div);
+    requestAnimationFrame(() => {
+      div.style.transition = 'opacity .18s ease, transform .28s ease';
+      div.style.opacity    = '1';
+      div.style.transform  = 'rotate(-3deg) scale(1)';
+    });
+    return div;
+  }
+
+  // Phase 1: 손패를 매칭 바닥 카드 위에 겹침 (1.2s)
+  if (!handMiss && handFieldMatchIds.length > 0) {
+    placeFloat(handCard, handFieldMatchIds[0]);
+  }
 
   _fpT1 = setTimeout(() => {
     _fpT1 = null;
-    // Phase 2: 덱 카드 (1.2s 표시)
-    el.innerHTML = buildOverlay(`${name} — 덱`, deckCard, deckMiss ? [] : lp.deckCaptured);
+
+    // Phase 2: 덱 카드도 매칭 바닥 카드 위에 겹침 (1.0s)
+    if (!deckMiss && deckFieldMatchIds.length > 0) {
+      placeFloat(deckCard, deckFieldMatchIds[0]);
+    }
 
     _fpT2 = setTimeout(() => {
       _fpT2 = null;
-      el.style.opacity = '0';
-      setTimeout(() => { el.style.display = 'none'; el.innerHTML = ''; }, 260);
-    }, 1200);
-  }, 1500);
+
+      // 획득 카드들 → 플레이어 획득 영역으로 슬라이드 아웃
+      const floats      = [...layer.querySelectorAll('.fp-float-card')];
+      const allMatchIds = [...new Set([...handFieldMatchIds, ...deckFieldMatchIds])];
+      const opPanel     = document.querySelector(`[data-pid="${prevPlayerId}"]`);
+      const myCapEl     = document.getElementById('my-captured');
+      const tgtEl       = opPanel || myCapEl;
+      const tgt         = tgtEl?.getBoundingClientRect();
+
+      floats.forEach(f => {
+        const fr = f.getBoundingClientRect();
+        const dx = tgt ? (tgt.left + tgt.width  / 2) - (fr.left + fr.width  / 2) : 0;
+        const dy = tgt ? (tgt.top  + tgt.height / 2) - (fr.top  + fr.height / 2)
+                       : (opPanel  ? -150 : 150);
+        f.style.transition = 'opacity .36s ease, transform .36s ease';
+        f.style.transform  = `translate(${dx}px,${dy}px) scale(0.28)`;
+        f.style.opacity    = '0';
+      });
+
+      // 임시 바닥의 매칭 카드도 페이드아웃
+      allMatchIds.forEach(id => {
+        const el = fieldEl.querySelector(`[data-id="${id}"]`);
+        if (el) { el.style.transition = 'opacity .36s ease'; el.style.opacity = '0'; }
+      });
+
+      setTimeout(() => {
+        if (layer) layer.innerHTML = '';
+        renderAll(state);
+      }, 400);
+    }, 1000);
+  }, 1200);
 }
 
 // ── 획득 카드 토글 ────────────────────────────────────────────────────
@@ -1183,8 +1235,8 @@ socket.on('game_started', d => {
   missGlowIds.clear();
   if (_fpT1) { clearTimeout(_fpT1); _fpT1 = null; }
   if (_fpT2) { clearTimeout(_fpT2); _fpT2 = null; }
-  const _fpl = document.getElementById('field-play-label');
-  if (_fpl) { _fpl.style.opacity = '0'; _fpl.style.display = 'none'; _fpl.innerHTML = ''; }
+  const _fal = document.getElementById('fp-anim-layer');
+  if (_fal) _fal.innerHTML = '';
   show('s-game');
 });
 
@@ -1692,6 +1744,7 @@ function renderOpponents(pids, nm, hs, cap, scores, go, curPid, playerScores) {
 
     const div = document.createElement('div');
     div.className = 'opponent-panel';
+    div.dataset.pid = pid;
     div.innerHTML = `
       <div class="opp-name">
         <span class="turn-ind ${cur?'on':''}"></span>
