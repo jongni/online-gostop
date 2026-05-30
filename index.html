@@ -850,6 +850,9 @@ function renderFieldTemp(cards, highlightIds) {
 }
 
 // ── 낸 패를 바닥의 매칭 카드 위에 직접 겹쳐서 보여주는 애니메이션 ────
+// Phase 1(즉시): 손패 배치 → 0.4s
+// Phase 2(+0.4s): 덱 카드 배치 → 0.4s
+// 수집(+0.4s): float 슬라이드 0.3s (매칭 바닥 카드는 즉시 제거)
 function showFieldPlay(lp, state, nameMap, prevPlayerId) {
   if (!lp || !lp.handCard || !Array.isArray(lp.deckCaptured)) return;
 
@@ -869,19 +872,8 @@ function showFieldPlay(lp, state, nameMap, prevPlayerId) {
   const handFieldMatchIds = handMiss ? [] : lp.handCaptured.filter(id => id !== handCard.id);
   // 덱으로 잡은 바닥 카드 ID (덱카드 자신 제외; 쪽이면 handCard.id 포함)
   const deckFieldMatchIds = deckMiss ? [] : lp.deckCaptured.filter(id => id !== deckCard?.id);
-
-  // ── 임시 바닥 구성: 실제 바닥 + 획득으로 사라진 매칭 카드를 복원 ──
-  const tempField = [...state.field];
-  const tempSeen  = new Set(tempField.map(c => c.id));
-  const addToTemp = id => {
-    if (tempSeen.has(id)) return;
-    const c = id === handCard.id  ? handCard
-            : id === deckCard?.id ? deckCard
-            : cardById[id];
-    if (c) { tempField.push(c); tempSeen.add(id); }
-  };
-  handFieldMatchIds.forEach(addToTemp);
-  deckFieldMatchIds.forEach(addToTemp);
+  // 덱이 잡은 실제 바닥 카드만 (쪽의 경우 handCard 제외)
+  const deckMatchFieldOnly = deckFieldMatchIds.filter(id => id !== handCard.id);
 
   // ── 바닥 외 UI 갱신 ─────────────────────────────────────────────────
   const s = state;
@@ -899,90 +891,120 @@ function showFieldPlay(lp, state, nameMap, prevPlayerId) {
     setStatus(`${s.nameMap[s.currentPlayerId] || name}의 차례`, false);
   }
 
-  // ── 임시 바닥 렌더 (deal-in 애니 없이) ─────────────────────────────
-  prevFieldIds = new Set(tempField.map(c => c.id));
-  renderField(tempField);
-
   if (!layer) { renderAll(state); return; }
-
   const fieldEl = document.getElementById('field-cards');
 
-  // 낸 패를 바닥의 targetId 카드 위에 겹치는 fixed 엘리먼트 생성
+  // 낸 패를 바닥의 targetId 카드 위에 ~44% 겹치는 fixed 엘리먼트 생성
   function placeFloat(playedCard, targetId) {
     if (!playedCard || targetId === undefined) return null;
-    const targetEl = fieldEl.querySelector(`[data-id="${targetId}"]`);
-    if (!targetEl) return null;
-    const r  = targetEl.getBoundingClientRect();
-    const cw = r.width, ch = r.height;
-
+    const tEl = fieldEl.querySelector(`[data-id="${targetId}"]`);
+    if (!tEl) return null;
+    const r = tEl.getBoundingClientRect();
     const div = document.createElement('div');
     div.className = 'fp-float-card';
     div.dataset.cardId = playedCard.id;
-    // 매칭된 바닥 카드에 ~45% 오른쪽으로 겹쳐 배치
-    div.style.cssText = `
-      left:${r.left + cw * 0.44}px;
-      top:${r.top - ch * 0.06}px;
-      width:${cw}px;
-      height:${ch}px;
-      background-image:url('img/cards/${playedCard.id}.png');
-      opacity:0;
-      transform:rotate(-5deg) scale(1.06);
-    `;
+    div.style.cssText = `left:${r.left + r.width * 0.44}px;top:${r.top - r.height * 0.06}px;`
+      + `width:${r.width}px;height:${r.height}px;`
+      + `background-image:url('img/cards/${playedCard.id}.png');`
+      + `opacity:0;transform:rotate(-5deg) scale(1.06);`;
     layer.appendChild(div);
     requestAnimationFrame(() => {
-      div.style.transition = 'opacity .18s ease, transform .28s ease';
+      div.style.transition = 'opacity .18s ease, transform .25s ease';
       div.style.opacity    = '1';
       div.style.transform  = 'rotate(-3deg) scale(1)';
     });
     return div;
   }
 
-  // Phase 1: 손패를 매칭 바닥 카드 위에 겹침 (1.2s)
+  // ── Phase 1: 손패 카드 배치 ─────────────────────────────────────────
+  // 바닥: deckCard 제외한 state.field + 손패 매칭 카드 복원
+  const phase1Field = state.field.filter(c => c.id !== deckCard?.id);
+  const p1Seen = new Set(phase1Field.map(c => c.id));
+  handFieldMatchIds.forEach(id => {
+    if (!p1Seen.has(id)) {
+      const c = cardById[id];
+      if (c) { phase1Field.push(c); p1Seen.add(id); }
+    }
+  });
+  // deal-in 제어: 매칭 카드 → no deal-in, handMiss 카드 → deal-in
+  handFieldMatchIds.forEach(id => prevFieldIds.add(id));
+  if (handMiss) prevFieldIds.delete(handCard.id);
+  renderField(phase1Field);
+
+  // 손패 캡처: 매칭 바닥 카드 위에 float 배치
   if (!handMiss && handFieldMatchIds.length > 0) {
     placeFloat(handCard, handFieldMatchIds[0]);
   }
 
+  // ── Phase 2: 덱 카드 배치 (0.4초 후) ─────────────────────────────────
   _fpT1 = setTimeout(() => {
     _fpT1 = null;
 
-    // Phase 2: 덱 카드도 매칭 바닥 카드 위에 겹침 (1.0s)
+    // 바닥: state.field + 손패/덱 매칭 카드 모두 복원
+    const phase2Field = [...state.field];
+    const p2Seen = new Set(phase2Field.map(c => c.id));
+    const addToP2 = id => {
+      if (p2Seen.has(id)) return;
+      const c = id === handCard.id  ? handCard
+              : id === deckCard?.id ? deckCard
+              : cardById[id];
+      if (c) { phase2Field.push(c); p2Seen.add(id); }
+    };
+    handFieldMatchIds.forEach(addToP2);
+    deckFieldMatchIds.forEach(addToP2);
+
+    // deal-in 제어: 실제 덱 매칭 바닥 카드 → no deal-in
+    //              deckCard(miss) / jjok handCard → prevFieldIds에 없으면 자동 deal-in
+    deckMatchFieldOnly.forEach(id => prevFieldIds.add(id));
+    renderField(phase2Field);
+
+    // 덱 캡처: 매칭 바닥 카드 위에 float 배치
     if (!deckMiss && deckFieldMatchIds.length > 0) {
       placeFloat(deckCard, deckFieldMatchIds[0]);
     }
 
+    // ── 수집 애니메이션 (0.4초 후) ────────────────────────────────────
     _fpT2 = setTimeout(() => {
       _fpT2 = null;
 
-      // 획득 카드들 → 플레이어 획득 영역으로 슬라이드 아웃
       const floats      = [...layer.querySelectorAll('.fp-float-card')];
       const allMatchIds = [...new Set([...handFieldMatchIds, ...deckFieldMatchIds])];
-      const opPanel     = document.querySelector(`[data-pid="${prevPlayerId}"]`);
-      const myCapEl     = document.getElementById('my-captured');
-      const tgtEl       = opPanel || myCapEl;
-      const tgt         = tgtEl?.getBoundingClientRect();
 
+      // 수집할 카드 없으면 즉시 renderAll (쌓인 패 등)
+      if (floats.length === 0 && allMatchIds.length === 0) {
+        layer.innerHTML = '';
+        renderAll(state);
+        return;
+      }
+
+      // 타깃: 상대 패널 또는 내 획득 영역
+      const opPanel = document.querySelector(`[data-pid="${prevPlayerId}"]`);
+      const myCapEl = document.getElementById('my-captured');
+      const tgt     = (opPanel || myCapEl)?.getBoundingClientRect();
+
+      // 매칭된 바닥 카드: 즉시 제거 (float이 이동 애니 담당)
+      allMatchIds.forEach(id => {
+        const el = fieldEl.querySelector(`[data-id="${id}"]`);
+        if (el) el.remove();
+      });
+
+      // Float 카드 → 획득 영역으로 슬라이드 (0.3초)
       floats.forEach(f => {
         const fr = f.getBoundingClientRect();
-        const dx = tgt ? (tgt.left + tgt.width  / 2) - (fr.left + fr.width  / 2) : 0;
-        const dy = tgt ? (tgt.top  + tgt.height / 2) - (fr.top  + fr.height / 2)
-                       : (opPanel  ? -150 : 150);
-        f.style.transition = 'opacity .36s ease, transform .36s ease';
-        f.style.transform  = `translate(${dx}px,${dy}px) scale(0.28)`;
+        const dx = tgt ? (tgt.left + tgt.width / 2) - (fr.left + fr.width / 2) : 0;
+        const dy = tgt ? (tgt.top + tgt.height / 2) - (fr.top + fr.height / 2)
+                       : (opPanel ? -150 : 150);
+        f.style.transition = 'opacity .3s ease, transform .3s ease';
+        f.style.transform  = `translate(${dx}px,${dy}px) scale(0.25)`;
         f.style.opacity    = '0';
       });
 
-      // 임시 바닥의 매칭 카드도 페이드아웃
-      allMatchIds.forEach(id => {
-        const el = fieldEl.querySelector(`[data-id="${id}"]`);
-        if (el) { el.style.transition = 'opacity .36s ease'; el.style.opacity = '0'; }
-      });
-
       setTimeout(() => {
-        if (layer) layer.innerHTML = '';
+        layer.innerHTML = '';
         renderAll(state);
-      }, 400);
-    }, 1000);
-  }, 1200);
+      }, 330);
+    }, 400);
+  }, 400);
 }
 
 // ── 획득 카드 토글 ────────────────────────────────────────────────────
