@@ -432,6 +432,11 @@ body {
 
 /* ── HEUNDEUL ── */
 .card.heundeul-card { box-shadow: 0 0 0 2px #7af, 0 0 10px rgba(100,160,255,.45) !important; }
+/* 내 차례에 바닥 패와 월이 같은 손패 강조 */
+.card.can-match:not(.selected) {
+  border-color: rgba(80,210,80,.8);
+  box-shadow: 0 0 0 2px rgba(80,210,80,.65), 0 0 10px rgba(80,210,80,.25);
+}
 
 /* ── TOAST ── */
 #toast-container {
@@ -1629,14 +1634,17 @@ function renderMyHand(cards, active) {
   const el = document.getElementById('my-hand');
   el.innerHTML = '';
   const heundeulMonths = new Set(gs?.heundeulMonths || []);
+  // 내 차례일 때: 바닥에 같은 월이 있는 손패 → can-match 표시
+  const fieldMonths = active ? new Set((gs?.field || []).map(c => c.month)) : new Set();
   const sorted = [...cards].sort((a, b) => a.month - b.month);
   sorted.forEach(c => {
     const sel        = selCard && selCard.id === c.id;
     const dim        = !active;
     const isHeundeul = heundeulMonths.has(c.month);
+    const isMatch    = active && fieldMonths.has(c.month);
     el.appendChild(makeCard(c, {
       onClick: active ? card => handClick(card) : null,
-      extraClass: `${sel?'selected':''} ${dim?'dim':''} ${isHeundeul?'heundeul-card':''}`,
+      extraClass: `${sel?'selected':''} ${dim?'dim':''} ${isHeundeul?'heundeul-card':''} ${isMatch?'can-match':''}`,
     }));
   });
 }

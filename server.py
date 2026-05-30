@@ -697,6 +697,17 @@ def handle_pato(room):
     }, to=room['id'])
 
 
+def next_turn_and_broadcast(room):
+    """lastPlay(deckCaptured 포함)를 보존한 채로 next_turn → broadcast_state 수행.
+    클라이언트가 낸 패 애니메이션을 보여줄 수 있도록 완전한 lastPlay를 전달한다."""
+    game      = room['game']
+    last_play = game.get('lastPlay')   # deckCaptured 포함된 스냅샷 보관
+    next_turn(room)                    # lastPlay = None 으로 초기화
+    game['lastPlay'] = last_play       # 브로드캐스트용으로 복원
+    broadcast_state(room)              # 완전한 lastPlay 포함하여 전달
+    game['lastPlay'] = None            # 정리
+
+
 def after_deck_card(room, pid):
     game = room['game']
     detect_and_apply_special_events(room, pid)   # 쪽/따닥/쌓인패/쓸
@@ -722,16 +733,14 @@ def after_deck_card(room, pid):
                 if all_empty:
                     handle_pato(room)   # 모두 패 소진 + 아무도 못 남 → 파토
                 else:
-                    next_turn(room)
-                    broadcast_state(room)
+                    next_turn_and_broadcast(room)
             else:
                 # 추가 점수 있음 OR 고를 안 했음 → 자동 스톱 (승리)
                 end_game(room, pid)
         elif not can_go:
             # 직전 고 이후 추가 점수 없음 → 독박 마킹 후 다음 턴
             game['dokbak_pid'] = pid
-            next_turn(room)
-            broadcast_state(room)
+            next_turn_and_broadcast(room)
         else:
             game['phase'] = 'go_stop'
             broadcast_state(room)
@@ -748,8 +757,7 @@ def after_deck_card(room, pid):
         # 덱 소진 → 일반 게임 종료 (최고점자 승리)
         end_game(room)
     else:
-        next_turn(room)
-        broadcast_state(room)
+        next_turn_and_broadcast(room)
 
 
 # ── 방 목록 ──────────────────────────────────────────────────────────
